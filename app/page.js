@@ -11,6 +11,7 @@ import {
   initial, avatarColor, previewText, computeStats, countPhrase,
   formatDuration, DOW,
 } from "../lib/chat";
+import { idbGetAll, idbSaveAll } from "../lib/db";
 
 const STORE_KEY = "wa_viewer_chats";
 const THEME_KEY = "wa_viewer_theme";
@@ -49,10 +50,29 @@ export default function Home() {
 
   /* ---------- storage ---------- */
   useEffect(() => {
-    try { setChats(JSON.parse(localStorage.getItem(STORE_KEY)) || []); } catch {}
     try { setDark(localStorage.getItem(THEME_KEY) === "dark"); } catch {}
     try { setBackupPref(localStorage.getItem(BACKUP_KEY)); } catch { setBackupPref(null); }
-    setLoaded(true);
+    (async () => {
+      // Primary storage: IndexedDB (fits huge chats). Migrate any old localStorage data once.
+      let list = await idbGetAll();
+      if (list === null) {
+        // IndexedDB unavailable → fall back to localStorage/sessionStorage
+        try { list = JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
+        catch { try { list = JSON.parse(sessionStorage.getItem(STORE_KEY)) || []; } catch { list = []; } }
+      } else {
+        let legacy = [];
+        try { legacy = JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch {}
+        if (legacy.length) {
+          const ids = new Set(list.map((c) => c.id));
+          list = [...list, ...legacy.filter((c) => !ids.has(c.id))];
+          idbSaveAll(list);
+          try { localStorage.removeItem(STORE_KEY); } catch {} // free the 5MB quota
+        }
+      }
+      list.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      setChats(list);
+      setLoaded(true);
+    })();
   }, []);
 
   useEffect(() => { chatsRef.current = chats; }, [chats]);
@@ -60,10 +80,18 @@ export default function Home() {
 
   useEffect(() => {
     if (!loaded) return;
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(chats)); }
-    catch {
-      alert("Browser storage is full — the chat is open for viewing but could not be saved. Try deleting an older chat.");
-    }
+    (async () => {
+      const ok = await idbSaveAll(chats);
+      if (!ok) {
+        // IndexedDB failed → try localStorage, then sessionStorage (survives the tab at least)
+        const json = JSON.stringify(chats);
+        try { localStorage.setItem(STORE_KEY, json); }
+        catch {
+          try { sessionStorage.setItem(STORE_KEY, json); }
+          catch { console.warn("Could not persist chats — storage unavailable."); }
+        }
+      }
+    })();
   }, [chats, loaded]);
 
   useEffect(() => {
@@ -441,10 +469,10 @@ export default function Home() {
       (c.preview || "").toLowerCase().includes(listQuery.trim().toLowerCase())
   );
 
-  const storageKb = useMemo(() => {
-    try { return Math.round(((localStorage.getItem(STORE_KEY) || "").length * 2) / 1024); }
-    catch { return 0; }
-  }, [chats]);
+  const storageKb = useMemo(
+    () => Math.round(chats.reduce((s, c) => s + (c.text?.length || 0) * 2, 0) / 1024),
+    [chats]
+  );
 
   /* ---------- Chat Wrapped PNG ---------- */
   const downloadWrapped = () => {
@@ -647,7 +675,7 @@ export default function Home() {
         <div className="storage-note">
           {uploadingCount > 0 && <span className="cloud-status">☁️ Syncing {uploadingCount} chat{uploadingCount > 1 ? "s" : ""} to cloud…<br /></span>}
           {chats.length
-            ? `${chats.length} chat${chats.length > 1 ? "s" : ""} saved locally · ${storageKb} KB used${cloudBackup ? " · cloud sync on" : ""}`
+            ? `${chats.length} chat${chats.length > 1 ? "s" : ""} saved locally · ${storageKb > 1024 ? (storageKb / 1024).toFixed(1) + " MB" : storageKb + " KB"}${cloudBackup ? " · cloud sync on" : ""}`
             : "Imported chats are saved in this browser only"}
         </div>
       </aside>
@@ -849,6 +877,25 @@ export default function Home() {
                 <tr key={"e" + s}><td>🔚 {s} ended the conversation</td><td>{n}×</td></tr>
               ))}
             </tbody></table>
+
+            <div className="section-title">📵 Days you didn&apos;t talk</div>
+            <div className="stat-grid">
+              <div className="stat-card"><div className="val">{stats.missedDays}</div><div className="lbl">Missed days</div></div>
+              <div className="stat-card"><div className="val">{stats.talkedPct}%</div><div className="lbl">Days you talked</div></div>
+              <div className="stat-card"><div className="val">{stats.spanDays}</div><div className="lbl">Total days span</div></div>
+            </div>
+            {stats.topGaps.length > 0 ? (
+              <table className="mini-table"><tbody>
+                {stats.topGaps.map((g, i) => (
+                  <tr key={i} className="clickable" onClick={() => scrollToDate(g.to)}>
+                    <td>🤫 No chat for <b>{g.days} day{g.days > 1 ? "s" : ""}</b> — {formatDate(g.from)} → {formatDate(g.to)}</td>
+                    <td>open →</td>
+                  </tr>
+                ))}
+              </tbody></table>
+            ) : (
+              <div className="fun-fact" style={{ color: "var(--text-secondary)" }}>You never skipped a day 🔥</div>
+            )}
 
             <div className="section-title">💕 Love &amp; sorry meter</div>
             {stats.phrases.filter((p) => p.total > 0).map((p) => (
