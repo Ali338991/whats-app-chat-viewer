@@ -1,0 +1,77 @@
+// Keepsake — database schema (PostgreSQL / Neon).
+// The client is generated into lib/generated/prisma (gitignored) by `prisma generate`.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum ChatStatus {
+  UPLOADING
+  READY
+  FAILED
+}
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique // always stored trimmed + lowercase
+  passwordHash      String
+  firstName         String
+  lastName          String    @default("")
+  role              Role      @default(USER)
+  active            Boolean   @default(true)
+  sessionVersion    Int       @default(0) // bump to revoke every session of this user
+  storageLimitBytes BigInt? // null = unlimited
+  failedLogins      Int       @default(0)
+  lockedUntil       DateTime?
+  lastLoginAt       DateTime?
+  onboardedAt       DateTime?
+  emailVerifiedAt   DateTime? // reserved for future email verification
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  chats             Chat[]
+}
+
+model Chat {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  status       ChatStatus  @default(UPLOADING)
+  textKey      String
+  me           String?
+  messageCount Int
+  firstDate    String?
+  lastDate     String?
+  preview      String?
+  mediaCount   Int         @default(0)
+  totalBytes   BigInt      @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  media        MediaFile[]
+
+  @@index([userId])
+}
+
+model MediaFile {
+  id     String @id @default(cuid())
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  name   String // original WhatsApp filename (basename)
+  key    String // R2 object key
+  size   BigInt
+  mime   String
+  kind   String // image | sticker | video | audio | file
+
+  @@unique([chatId, name])
+  @@index([chatId])
+}

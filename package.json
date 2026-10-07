@@ -1,15 +1,27 @@
 {
-  "name": "whatsapp-chat-viewer",
+  "name": "keepsake",
   "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:dev": "prisma migrate dev"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "aws4fetch": "^1.0.20",
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.12",
     "next": "^16.2.10",
+    "pg": "^8.23.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "prisma": "7.10.0"
   }
 }

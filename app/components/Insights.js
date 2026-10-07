@@ -3,24 +3,45 @@
 // Insights dashboard — lazy-loaded, all analytics computed locally & memoized.
 // Every card is clickable and jumps into the chat via the shared jump system.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDate, formatDuration } from "../../lib/chat";
 import {
-  computeInsights, buildMemoryPool, thisDayInHistory, buildSummaryMarkdown,
+  computeInsightsCached, peekInsightsCache, buildMemoryPool, thisDayInHistory, buildSummaryMarkdown,
   MOODS, TOPICS, LOVE_LANGUAGES,
 } from "../../lib/insights";
 
 const hr12 = (h) => `${((h + 11) % 12) + 1}${h < 12 ? "am" : "pm"}`;
 
 export default function Insights({ chatName, messages, senders, onJump, onJumpDate, onReplay, onClose }) {
-  const ins = useMemo(() => computeInsights(messages, senders), [messages, senders]);
+  // Compute after first paint so the overlay + spinner show instantly;
+  // cached per chat, so reopening is immediate.
+  const [ins, setIns] = useState(() => peekInsightsCache(messages));
   const [customMilestone, setCustomMilestone] = useState("");
   const [memory, setMemory] = useState(null);
   const memPool = useRef(null);
 
+  useEffect(() => {
+    if (ins) return;
+    const t = setTimeout(() => setIns(computeInsightsCached(messages, senders)), 30);
+    return () => clearTimeout(t);
+  }, [ins, messages, senders]);
+
   const thisDay = useMemo(() => (ins ? thisDayInHistory(ins) : []), [ins]);
 
-  if (!ins) return null;
+  if (!ins) {
+    return (
+      <div className="insights-overlay">
+        <div className="insights-head">
+          <h2>🧭 Insights — {chatName}</h2>
+          <div className="insights-actions"><button className="icon-btn" onClick={onClose}>✕</button></div>
+        </div>
+        <div className="insights-loading">
+          <div className="spinner" />
+          <div>Analyzing {messages.length.toLocaleString()} messages…<br /><small>only the first time — cached after this</small></div>
+        </div>
+      </div>
+    );
+  }
 
   const jump = (label, indices, hlRe) => { onClose(); onJump(label, indices, hlRe); };
   const jumpDate = (date) => { onClose(); onJumpDate(date); };
@@ -441,7 +462,7 @@ function YearCalendar({ year, days, onOpen }) {
           <i key={i}
             className={c.d ? "on clickable" : ""}
             title={`${new Date(c.ts).toDateString()}${c.d ? ` — ${c.d.count} messages` : ""}`}
-            style={c.d ? { background: `rgba(0,168,132,${0.25 + 0.75 * (c.d.count / maxN)})` } : {}}
+            style={c.d ? { background: `rgba(var(--accent-rgb), ${0.25 + 0.75 * (c.d.count / maxN)})` } : {}}
             onClick={() => c.d && onOpen(c.d.date)}
           />
         ))}

@@ -19,6 +19,10 @@ yarn-error.log*
 
 # env files
 .env*
+!.env.example
 
 # vercel
 .vercel
+
+# prisma generated client
+/lib/generated/
