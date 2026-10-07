@@ -14,7 +14,7 @@ export default function AuthShell({ children }) {
             <p>Upload a WhatsApp export once, then relive it from any browser — every message, exactly as it was.</p>
           </div>
           <ul className="auth-props">
-            <li><span className="ap-ic"><IconShield size={18} /></span><div><b>Private by design</b><small>Your chats are visible only to you.</small></div></li>
+            <li><span className="ap-ic"><IconShield size={18} /></span><div><b>Private by design</b><small>Your chats live in your own vault, never shared or public.</small></div></li>
             <li><span className="ap-ic"><IconLock size={18} /></span><div><b>Password-protected</b><small>Signed sessions, lockout after repeated failed sign-ins.</small></div></li>
             <li><span className="ap-ic"><IconImage size={18} /></span><div><b>All your media</b><small>Photos, videos, voice notes and documents — kept forever.</small></div></li>
             <li><span className="ap-ic"><IconPhone size={18} /></span><div><b>Free up your phone</b><small>Delete the chat from your phone once it&apos;s safely stored.</small></div></li>

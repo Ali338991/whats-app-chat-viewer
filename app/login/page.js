@@ -10,7 +10,7 @@ export const metadata = { title: "Sign in" };
 export default async function LoginPage() {
   let user = null;
   try { user = await getCurrentUser(); } catch (err) { console.error(err); }
-  if (user) redirect(user.onboardedAt ? "/vault" : "/onboarding");
+  if (user) redirect(user.role === "ADMIN" ? "/admin" : user.onboardedAt ? "/vault" : "/onboarding");
   return (
     <AuthShell>
       <LoginForm />

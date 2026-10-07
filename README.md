@@ -27,7 +27,7 @@ fully responsive.
 - `/signup` — create an account (can be closed with `SIGNUPS_ENABLED=false`)
 - `/login` — sign in
 - `/onboarding` — 3-step welcome: what the vault does → how to export (iPhone / Android) → upload your first chat
-- `/vault` — your chats, storage usage, upload, delete/rename
+- `/vault` — your chats, storage usage, upload, rename, remove
 - `/admin` — user management (admins only)
 
 ## Architecture
@@ -69,7 +69,7 @@ hundreds of MB. So file bytes **never** pass through our API:
    exponential backoff (re-signing on retry), byte-level progress, speed and ETA, cancel. The chat
    text is uploaded last, then `POST …/complete` registers the media and flips the chat to `READY`.
    Until then the chat is hidden from the viewer. Failed uploads are marked `FAILED` and can be
-   deleted from the list; cancelled uploads are removed automatically.
+   removed from the list; cancelled uploads are removed automatically (soft delete — see below).
 3. **Instant media when viewing.** `GET /api/vault/chats/[id]` returns the chat metadata, a
    presigned URL for the chat text, and **every media file with a ready-made presigned GET URL**
    (24 h, correct `Content-Type`). Signing is pure local HMAC, so thousands of links take a few
@@ -156,6 +156,16 @@ Open http://localhost:3000.
 4. Deploy. The build runs `prisma generate && next build`.
 5. Add your production URL to the R2 CORS `AllowedOrigins`.
 
+## Deleting chats (soft delete)
+
+- When a user removes a chat from their vault (`DELETE /api/vault/chats/[id]`), it is only
+  **hidden**: `Chat.deletedAt` is set, the chat disappears from their list, every user endpoint
+  (detail, rename, upload, media) returns 404 for it, and it stops counting toward their quota.
+  The stored text and media stay in R2 and the rows stay in Postgres.
+- Data is only erased when an **admin permanently deletes** it (per chat, in bulk via purge, or by
+  deleting the whole user). **Nothing is ever deleted automatically** — there is no cron job.
+- An admin can restore a removed chat at any time before it is permanently deleted.
+
 ## Admin
 
 `/admin` (admins only; linked from the user menu in the vault — an existing admin can promote any user) lists every user with chat count
@@ -165,14 +175,30 @@ and storage used vs quota. Admins can:
 - reset a password (signs that user out everywhere)
 - change the storage quota (empty = unlimited)
 - promote/demote admins, enable/disable accounts (disabling signs them out), unlock a locked account
-- delete a user — removes all of their stored files from R2, then the account and its data
+- delete a user — removes all of their stored files from R2 (including chats they removed), then the account and its data
+- **browse any user's chats**: click a user to see their profile, active vs removed storage, and
+  their chats in *Active* / *Deleted* tabs. **Open** shows the chat read-only in the normal viewer
+  (with a "Viewing {owner}'s chat as admin" banner; choosing "me" is not saved). Removed chats can be
+  **restored**; any chat can be **deleted permanently** (active chats need a typed confirmation).
+- **Deleted chats** tab: every removed chat across all users (owner, size, how long ago it was
+  removed, a badge at 30+ days) with Restore / Delete permanently, plus **"Permanently delete all
+  deleted > 30 days"**. That button calls `POST /api/admin/chats/purge {olderThanDays: 30}`
+  repeatedly — each call hard-deletes at most 10 chats and returns `{deleted, remaining}` so it
+  stays within serverless time limits.
+
+Admin API: `GET /api/admin/users/[id]/chats`, `GET /api/admin/chats?deleted=1`,
+`GET|DELETE /api/admin/chats/[id]`, `POST /api/admin/chats/[id]/restore`,
+`POST /api/admin/chats/purge`, `GET /api/admin/media/[id]?download=1`.
 
 An admin can't delete, disable or demote themselves.
 
 ## Privacy notes
 
 - Local mode never uploads anything.
-- In vault mode, chats are private to their owner: every API checks ownership and returns 404
-  otherwise; media links are short-lived signed URLs. R2 encrypts objects at rest.
-- If you offer this publicly, publish a privacy policy describing that users' chats are stored
-  in your R2 bucket and database.
+- In vault mode, users can only reach their own chats: every user API checks ownership and
+  returns 404 otherwise; media links are short-lived signed URLs. R2 encrypts objects at rest.
+- **Admins can open any user's chats** (including removed ones) from `/admin`.
+- Removing a chat hides it from the user but keeps the data until an admin permanently deletes it.
+- If you offer this publicly, your privacy policy must disclose that users' chats are stored in
+  your R2 bucket and database, that administrators can access them, and how long removed
+  (soft-deleted) chats are retained before permanent deletion.

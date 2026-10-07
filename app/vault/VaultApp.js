@@ -9,61 +9,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ChatViewer from "../components/ChatViewer";
 import UploadPanel from "../components/UploadPanel";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { formatDate, initial, avatarColor } from "../../lib/chat";
 import { formatBytes } from "../../lib/vaultUpload";
 import { useTheme } from "../../lib/useTheme";
 import { BRAND_NAME } from "../../lib/brand";
+import { getJson, buildMediaMaps, fetchText, REFRESH_AFTER_MS } from "../../lib/chatDetail";
 import {
   IconLogo, IconSun, IconMoon, IconUpload, IconTrash, IconLogout, IconUsers, IconSearch,
   IconClose, IconAlert, IconEdit, IconImage, IconChat, IconCloud, IconLock,
 } from "../components/Icons";
 
-const REFRESH_AFTER_MS = 20 * 3600 * 1000; // presigned media links last 24h
 const TEXT_CACHE_SIZE = 3;
-
-async function getJson(url, opts) {
-  const res = await fetch(url, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const e = new Error(data.error || `Request failed (${res.status})`);
-    e.status = res.status;
-    throw e;
-  }
-  return data;
-}
-
-// filename → URL maps from the chat detail response (full URLs, or the compact form).
-function buildMediaMaps(detail) {
-  const mediaUrls = {};
-  const downloadUrls = {};
-  const s = detail.signing;
-  for (const m of detail.media || []) {
-    const url = m.url || (s && `${s.base}${m.path}?${s.query}&response-content-type=${encodeURIComponent(m.mime)}&X-Amz-Signature=${m.sig}`);
-    if (!url) continue;
-    mediaUrls[m.name] = url;
-    downloadUrls[m.name] = `/api/vault/media/${m.id}?download=1`;
-  }
-  return { mediaUrls, downloadUrls };
-}
-
-// Download the chat text from R2 with progress.
-async function fetchText(url, onProgress) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Couldn't download the chat (${res.status}).`);
-  const total = Number(res.headers.get("Content-Length")) || 0;
-  if (!res.body || !total) return res.text();
-  const reader = res.body.getReader();
-  const chunks = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.length;
-    onProgress?.(Math.min(100, (got / total) * 100));
-  }
-  return new TextDecoder("utf-8").decode(await new Blob(chunks).arrayBuffer());
-}
 
 export default function VaultApp({ user }) {
   const router = useRouter();
@@ -196,9 +153,17 @@ export default function VaultApp({ user }) {
     } catch (err) { alert(err.message); }
   };
 
-  const deleteChat = async (e, c) => {
+  const [removing, setRemoving] = useState(null); // chat awaiting "Remove" confirmation
+
+  const deleteChat = (e, c) => {
     e.stopPropagation();
-    if (!confirm(`Delete "${c.name}" from your vault?\n\nAll its messages and media will be permanently removed. This can't be undone.`)) return;
+    setRemoving(c);
+  };
+
+  const confirmRemove = async () => {
+    const c = removing;
+    setRemoving(null);
+    if (!c) return;
     setChats((cs) => cs.map((x) => (x.id === c.id ? { ...x, deleting: true } : x)));
     try {
       await getJson(`/api/vault/chats/${c.id}`, { method: "DELETE" });
@@ -293,6 +258,9 @@ export default function VaultApp({ user }) {
       <aside className="sidebar">
         <div className="side-header">
           <Link href="/vault" className="brand"><IconLogo size={30} /><span>{BRAND_NAME}</span></Link>
+          {user.role === "ADMIN" && (
+            <Link className="icon-btn" href="/admin" title="Admin panel — users & their chats"><IconUsers /></Link>
+          )}
           <button className="icon-btn" title="Toggle dark mode" onClick={toggleTheme}>{dark ? <IconSun /> : <IconMoon />}</button>
           <div className="user-menu">
             <button className="user-chip" onClick={() => setMenuOpen((o) => !o)} title={fullName}>
@@ -365,7 +333,7 @@ export default function VaultApp({ user }) {
                   </div>
                   <div className="item-actions">
                     {ready && <button className="del" title="Rename" onClick={(e) => renameChat(e, c)}><IconEdit size={15} /></button>}
-                    <button className={`del${ready ? "" : " always"}`} title="Delete chat" onClick={(e) => deleteChat(e, c)} disabled={c.deleting}><IconTrash size={15} /></button>
+                    <button className={`del${ready ? "" : " always"}`} title="Remove from vault" onClick={(e) => deleteChat(e, c)} disabled={c.deleting}><IconTrash size={15} /></button>
                   </div>
                 </div>
               );
@@ -397,6 +365,17 @@ export default function VaultApp({ user }) {
         onMediaError={refreshLinks}
         emptyState={errorState || empty}
       />
+
+      {removing && (
+        <ConfirmDialog
+          title="Remove this chat from your vault?"
+          message={<>&ldquo;{removing.name}&rdquo; will no longer appear in your vault and won&apos;t count toward your storage.</>}
+          confirmLabel="Remove"
+          danger
+          onConfirm={confirmRemove}
+          onCancel={() => setRemoving(null)}
+        />
+      )}
 
       {uploadOpen && (
         <div className="modal-bg" onClick={(e) => { if (e.target === e.currentTarget && !uploadBusy) { setUploadOpen(false); setUploadFile(null); } }}>

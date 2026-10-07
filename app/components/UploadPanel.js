@@ -72,7 +72,7 @@ export default function UploadPanel({ initialFile = null, onUploaded, onCancel, 
 
   const cancel = () => {
     if (busy) {
-      if (!confirm("Cancel this upload? Files uploaded so far will be removed.")) return;
+      if (!confirm("Cancel this upload? The chat won't be added to your vault.")) return;
       ctrlRef.current?.abort();
     } else onCancel?.();
   };
@@ -134,7 +134,7 @@ export default function UploadPanel({ initialFile = null, onUploaded, onCancel, 
       {state === "error" && (
         <div className="alert alert-error">
           <IconAlert size={18} />
-          <div><b>Upload failed.</b> {errorMsg}<br /><small>The incomplete upload is listed in your vault — delete it and try again.</small></div>
+          <div><b>Upload failed.</b> {errorMsg}<br /><small>The incomplete upload is listed in your vault — remove it and try again.</small></div>
         </div>
       )}
       <label

@@ -53,7 +53,7 @@ export function LoginForm() {
         setBusy(false);
         return;
       }
-      router.replace(data.user?.onboarded ? "/vault" : "/onboarding");
+      router.replace(data.user?.role === "ADMIN" ? "/admin" : data.user?.onboarded ? "/vault" : "/onboarding");
       router.refresh();
     } catch {
       setErr({ msg: "Network error — check your connection and try again." });

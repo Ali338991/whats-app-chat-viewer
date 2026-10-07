@@ -63,7 +63,7 @@ export default function Onboarding({ user }) {
             <h1>Welcome, {user.firstName} 👋</h1>
             <p className="onb-lead">Your vault keeps your WhatsApp chats safe — exactly as they were — so you can relive them anytime, from any browser.</p>
             <div className="onb-grid">
-              <div className="onb-feat"><span className="of-ic"><IconShield size={20} /></span><b>Private</b><small>Only you can see your chats.</small></div>
+              <div className="onb-feat"><span className="of-ic"><IconShield size={20} /></span><b>Private</b><small>Never shared or made public.</small></div>
               <div className="onb-feat"><span className="of-ic"><IconLock size={20} /></span><b>Password-protected</b><small>Secure, signed sessions.</small></div>
               <div className="onb-feat"><span className="of-ic"><IconImage size={20} /></span><b>Kept forever</b><small>Photos, videos and voice notes included.</small></div>
               <div className="onb-feat"><span className="of-ic"><IconPhone size={20} /></span><b>Free up your phone</b><small>Delete the chat once it&apos;s stored.</small></div>
