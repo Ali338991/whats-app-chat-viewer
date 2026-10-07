@@ -43,7 +43,7 @@ Browser ──(small JSON)──▶ Next.js route handlers (Vercel) ──▶ Po
 - **Next.js 16 App Router** (JavaScript, React 19). Auth is checked inside every route handler and
   server component (no proxy/middleware).
 - **Auth**: email + password (bcrypt, cost 12), HS256 JWT session cookie (`ks_session`, httpOnly,
-  SameSite=Lax, Secure in production, 30 days). Each user has a `sessionVersion`; resetting a
+  SameSite=Lax, Secure in production). Sessions last `SESSION_HOURS` (default 24) from sign-in, then the user must log in again. Each user has a `sessionVersion`; resetting a
   password or disabling an account bumps it and revokes every session. 5 consecutive failed
   sign-ins lock the account for 15 minutes.
 - **Database**: Prisma 7.10 with the `@prisma/adapter-pg` driver adapter. Schema in
@@ -93,6 +93,7 @@ Copy `.env.example` to `.env.local` (for local dev) and set the same keys on Ver
 | `AUTH_SECRET` | Session signing secret — `openssl rand -base64 32` |
 | `SIGNUPS_ENABLED` | `true` (default) or `false` to close public sign-up |
 | `DEFAULT_STORAGE_LIMIT_GB` | Quota for new self-service accounts (default `5`; `0` = unlimited) |
+| `SESSION_HOURS` | How long a sign-in lasts before logging in again (default `24`) |
 | `S3_ENDPOINT` | S3 API endpoint — for R2: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (no bucket, no trailing slash) |
 | `S3_REGION` | `auto` for R2 |
 | `S3_BUCKET` | Bucket name |
