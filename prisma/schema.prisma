@@ -22,23 +22,24 @@ enum ChatStatus {
 }
 
 model User {
-  id                String    @id @default(cuid())
-  email             String    @unique // always stored trimmed + lowercase
+  id                String       @id @default(cuid())
+  email             String       @unique // always stored trimmed + lowercase
   passwordHash      String
   firstName         String
-  lastName          String    @default("")
-  role              Role      @default(USER)
-  active            Boolean   @default(true)
-  sessionVersion    Int       @default(0) // bump to revoke every session of this user
+  lastName          String       @default("")
+  role              Role         @default(USER)
+  active            Boolean      @default(true)
+  sessionVersion    Int          @default(0) // bump to revoke every session of this user
   storageLimitBytes BigInt? // null = unlimited
-  failedLogins      Int       @default(0)
+  failedLogins      Int          @default(0)
   lockedUntil       DateTime?
   lastLoginAt       DateTime?
   onboardedAt       DateTime?
   emailVerifiedAt   DateTime? // reserved for future email verification
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
   chats             Chat[]
+  auditEvents       AuditEvent[]
 }
 
 model Chat {
@@ -76,4 +77,30 @@ model MediaFile {
 
   @@unique([chatId, name])
   @@index([chatId])
+}
+
+// Audit log: logins and in-chat activity (actor = userId), plus admin actions.
+// Chat/media fields are snapshots with NO foreign keys, so entries survive deletes.
+model AuditEvent {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String // LOGIN, SIGNUP, LOGOUT, LOGIN_FAILED, CHAT_OPEN, MEDIA_VIEW, VIDEO_PLAY, AUDIO_PLAY, DOC_DOWNLOAD, ADMIN_*
+  chatId       String?
+  chatName     String?
+  mediaId      String?
+  mediaName    String?
+  mediaKind    String?
+  targetUserId String?
+  meta         Json?
+  ip           String?
+  userAgent    String?
+  country      String?
+  city         String?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@index([chatId])
+  @@index([type])
 }

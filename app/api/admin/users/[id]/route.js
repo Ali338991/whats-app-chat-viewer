@@ -3,6 +3,7 @@ import { json, error, readJson, handler } from "../../../../../lib/api";
 import { requireAdmin, hashPassword, setSessionCookie, passwordProblem, cleanName } from "../../../../../lib/auth";
 import { serializeAdminUser, parseLimit, userUsage } from "../../../../../lib/adminUsers";
 import { deletePrefix, userPrefix } from "../../../../../lib/r2";
+import { logEvent } from "../../../../../lib/audit";
 
 async function findUser(id) {
   if (typeof id !== "string" || id.length > 64) return null;
@@ -62,6 +63,20 @@ export const PATCH = handler(async (request, { params }) => {
   // Changing your own password revokes your old sessions — keep this one signed in.
   if (self && revoke) await setSessionCookie(updated);
 
+  // Audit: which fields changed (new values, never the password itself).
+  const changes = {};
+  for (const k of ["firstName", "lastName", "role", "active"]) if (k in data && data[k] !== target[k]) changes[k] = data[k];
+  if ("storageLimitBytes" in data) {
+    const before = target.storageLimitBytes == null ? null : Number(target.storageLimitBytes);
+    const after = data.storageLimitBytes == null ? null : Number(data.storageLimitBytes);
+    if (before !== after) changes.storageLimitBytes = after;
+  }
+  if (b.password !== undefined) changes.password = "changed";
+  if (b.unlock) changes.unlocked = true;
+  if (Object.keys(changes).length) {
+    await logEvent(request, admin.id, { type: "ADMIN_USER_UPDATE", targetUserId: target.id, meta: { email: target.email, fields: Object.keys(changes), changes } });
+  }
+
   return json({ user: serializeAdminUser(updated, await userUsage(target.id)) });
 });
 
@@ -77,7 +92,7 @@ export const GET = handler(async (_request, { params }) => {
 
 // DELETE /api/admin/users/[id] — delete all of the user's stored files
 // (including chats they removed), then the user.
-export const DELETE = handler(async (_request, { params }) => {
+export const DELETE = handler(async (request, { params }) => {
   const { user: admin, response } = await requireAdmin();
   if (response) return response;
   const { id } = await params;
@@ -94,5 +109,9 @@ export const DELETE = handler(async (_request, { params }) => {
     await deletePrefix(userPrefix(target.id), [...chats.map((c) => c.textKey), ...media.map((m) => m.key)]);
   }
   await prisma.user.delete({ where: { id: target.id } });
+  await logEvent(request, admin.id, {
+    type: "ADMIN_USER_DELETE", targetUserId: target.id,
+    meta: { email: target.email, name: [target.firstName, target.lastName].filter(Boolean).join(" "), chatCount },
+  });
   return json({ ok: true });
 });

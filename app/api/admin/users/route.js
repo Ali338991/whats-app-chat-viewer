@@ -2,6 +2,7 @@ import { prisma } from "../../../../lib/prisma";
 import { json, error, readJson, handler } from "../../../../lib/api";
 import { requireAdmin, hashPassword, normalizeEmail, validEmail, passwordProblem, cleanName } from "../../../../lib/auth";
 import { listUsersWithUsage, serializeAdminUser, parseLimit } from "../../../../lib/adminUsers";
+import { logEvent } from "../../../../lib/audit";
 
 // GET /api/admin/users — every user with chat count and storage used.
 export const GET = handler(async () => {
@@ -12,7 +13,7 @@ export const GET = handler(async () => {
 
 // POST /api/admin/users — create a user directly (bypasses SIGNUPS_ENABLED).
 export const POST = handler(async (request) => {
-  const { response } = await requireAdmin();
+  const { user: admin, response } = await requireAdmin();
   if (response) return response;
   const b = await readJson(request);
   if (!b) return error(400, "Invalid request.");
@@ -34,5 +35,6 @@ export const POST = handler(async (request) => {
   const user = await prisma.user.create({
     data: { email, firstName, lastName, passwordHash: await hashPassword(b.password), role, storageLimitBytes: limit.value },
   });
+  await logEvent(request, admin.id, { type: "ADMIN_USER_CREATE", targetUserId: user.id, meta: { email: user.email, role: user.role } });
   return json({ user: serializeAdminUser(user) }, { status: 201 });
 });

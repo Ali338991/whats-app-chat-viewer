@@ -1,5 +1,6 @@
 import { prisma } from "../../../../lib/prisma";
 import { json, error, readJson, handler } from "../../../../lib/api";
+import { logEvent } from "../../../../lib/audit";
 import {
   authConfigured, signupsEnabled, normalizeEmail, validEmail, passwordProblem, cleanName,
   hashPassword, setSessionCookie, publicUser, defaultStorageLimitBytes,
@@ -48,5 +49,6 @@ export const POST = handler(async (request) => {
     throw err;
   }
   await setSessionCookie(user);
+  await logEvent(request, user.id, { type: "SIGNUP" });
   return json({ user: publicUser(user) }, { status: 201 });
 });

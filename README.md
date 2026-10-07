@@ -192,6 +192,31 @@ Admin API: `GET /api/admin/users/[id]/chats`, `GET /api/admin/chats?deleted=1`,
 
 An admin can't delete, disable or demote themselves.
 
+## Audit log
+
+Every account has a permanent activity record, visible to admins in `/admin` (user → **Logins** /
+**Activity** tabs, and the global **Audit log** tab). Stored in the `AuditEvent` table:
+
+- **Sign-ins**: `LOGIN`, `SIGNUP`, `LOGOUT`, and `LOGIN_FAILED` (wrong password for an existing
+  account; flagged when it triggers the 15-minute lockout). Each with time, IP address, user agent
+  (shown as browser · OS · device) and, on Vercel, country/city from Vercel's geo headers.
+- **Chat activity**: `CHAT_OPEN` (logged by the server when a chat is opened; repeats within 30 minutes
+  and signed-link refreshes are skipped), `MEDIA_VIEW` (photo/sticker opened), `VIDEO_PLAY`,
+  `AUDIO_PLAY` (voice notes etc.) and `DOC_DOWNLOAD`. Media events are reported by the vault page in
+  small batches (`POST /api/vault/events`, deduped per file for 10 minutes); the server validates the
+  chat and file and sets time/IP/user agent itself. Local mode never sends anything, and an admin
+  viewing a chat is never logged as the user.
+- **Admin actions** (actor = the admin): opening a user's chat, restoring or permanently deleting a
+  chat, purges, and creating/updating/deleting users (which fields changed — never passwords).
+
+Chat and file names are stored as snapshots without foreign keys, so the history survives chat
+deletion. Events are **kept indefinitely** (they are only removed if the user account itself is
+deleted). Logging is best-effort: if a write fails — even if the `AuditEvent` table doesn't exist
+yet because the migration hasn't run — sign-in, viewing and everything else keep working.
+
+Admin API: `GET /api/admin/users/[id]/logins`, `GET /api/admin/users/[id]/activity?type=&chatId=`,
+`GET /api/admin/audit?type=&userId=` (all cursor-paginated, 50 per page, `?cursor=`).
+
 ## Privacy notes
 
 - Local mode never uploads anything.
@@ -199,6 +224,9 @@ An admin can't delete, disable or demote themselves.
   returns 404 otherwise; media links are short-lived signed URLs. R2 encrypts objects at rest.
 - **Admins can open any user's chats** (including removed ones) from `/admin`.
 - Removing a chat hides it from the user but keeps the data until an admin permanently deletes it.
-- If you offer this publicly, your privacy policy must disclose that users' chats are stored in
+- Sign-ins (with IP address, device and approximate location) and in-chat activity (chats opened,
+  photos viewed, videos/audio played, documents downloaded) are recorded in the audit log.
+- If you offer this publicly, your privacy policy must disclose activity logging and the collection
+  of IP addresses / approximate location, and that users' chats are stored in
   your R2 bucket and database, that administrators can access them, and how long removed
   (soft-deleted) chats are retained before permanent deletion.

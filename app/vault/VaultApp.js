@@ -15,12 +15,21 @@ import { formatBytes } from "../../lib/vaultUpload";
 import { useTheme } from "../../lib/useTheme";
 import { BRAND_NAME } from "../../lib/brand";
 import { getJson, buildMediaMaps, fetchText, REFRESH_AFTER_MS } from "../../lib/chatDetail";
+import { useMediaEventReporter } from "../../lib/mediaEvents";
 import {
   IconLogo, IconSun, IconMoon, IconUpload, IconTrash, IconLogout, IconUsers, IconSearch,
   IconClose, IconAlert, IconEdit, IconImage, IconChat, IconCloud, IconLock,
 } from "../components/Icons";
 
-const TEXT_CACHE_SIZE = 3;
+// Downloaded chat texts kept in memory: 1 on touch/mobile devices (tight
+// per-tab memory limits, e.g. iOS Safari), 3 on desktop.
+function textCacheSize() {
+  try {
+    return window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 1 ? 1 : 3;
+  } catch {
+    return 1;
+  }
+}
 
 export default function VaultApp({ user }) {
   const router = useRouter();
@@ -43,6 +52,7 @@ export default function VaultApp({ user }) {
   const [dragging, setDragging] = useState(false);
 
   const textCache = useRef(new Map()); // id -> text (small LRU)
+  const reportMedia = useMediaEventReporter(active?.id); // activity log (vault only)
   const fetchedAt = useRef(0);
   const lastRefresh = useRef(0);
   const openSeq = useRef(0);
@@ -81,7 +91,7 @@ export default function VaultApp({ user }) {
         setOpening({ label: "Downloading messages…", percent: 0 });
         text = await fetchText(detail.textUrl, (p) => seq === openSeq.current && setOpening({ label: "Downloading messages…", percent: p }));
         textCache.current.set(id, text);
-        while (textCache.current.size > TEXT_CACHE_SIZE) textCache.current.delete(textCache.current.keys().next().value);
+        while (textCache.current.size > textCacheSize()) textCache.current.delete(textCache.current.keys().next().value);
       }
       if (seq !== openSeq.current) return;
       setOpening({ label: "Preparing your chat…" });
@@ -116,7 +126,7 @@ export default function VaultApp({ user }) {
     lastRefresh.current = Date.now();
     const seq = openSeq.current;
     try {
-      const detail = await getJson(`/api/vault/chats/${id}`);
+      const detail = await getJson(`/api/vault/chats/${id}?refresh=1`);
       if (seq === openSeq.current) {
         fetchedAt.current = Date.now();
         setMaps(buildMediaMaps(detail));
@@ -363,6 +373,7 @@ export default function VaultApp({ user }) {
         onBack={() => setMobileOpen(false)}
         onSetMe={setMe}
         onMediaError={refreshLinks}
+        onMediaEvent={reportMedia}
         emptyState={errorState || empty}
       />
 

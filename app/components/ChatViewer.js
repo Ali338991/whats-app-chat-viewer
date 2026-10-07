@@ -4,13 +4,16 @@
 // header, search, jump bar, message list, stats modal + Wrapped card,
 // custom phrase counter, Insights, Replay and Chat Info overlays.
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
-  parseText, formatText, formatDate, escapeHtml, isEmojiOnly,
-  initial, avatarColor, computeStatsCached, peekStatsCache,
-  formatDuration, DOW, attachment, mediaKind, basename,
+  parseText, formatDate, initial, avatarColor, computeStatsCached, peekStatsCache,
+  formatDuration, DOW,
 } from "../../lib/chat";
+import {
+  initialWindow, extendUp, extendDown, windowAround, inWindow, renderWindowHtml,
+  buildSearchCorpus, scanChunk, occurrenceInMessage, firstIndexByDate, SEARCH_HIT_CAP,
+} from "../../lib/chatWindow";
 import { BRAND_NAME } from "../../lib/brand";
 import { IconBack, IconSparkles, IconChart, IconSearch, IconInfo, IconClose, IconUp, IconDown, IconArrowDown } from "./Icons";
 
@@ -32,15 +35,17 @@ const ChatInfo = dynamic(() => import("./ChatInfo"), { ssr: false });
  * @param {Function} [props.onBack]       mobile back button
  * @param {Function} [props.onSetMe]      (senderName) => void
  * @param {Function} [props.onMediaError] a media element failed to load (e.g. expired link)
+ * @param {Function} [props.onMediaEvent] (type, mediaName) — photo view / video+audio play / doc
+ *        download, for the vault's activity log. Only /vault passes it.
  * @param {React.ReactNode} [props.emptyState]
  */
 export default function ChatViewer({
   chat, mediaUrls = {}, downloadUrls, remote = false, loading = null,
-  onBack, onSetMe, onMediaError, emptyState = null,
+  onBack, onSetMe, onMediaError, onMediaEvent, emptyState = null,
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQ, setSearchQ] = useState("");
-  const [matchInfo, setMatchInfo] = useState({ cur: -1, total: 0 });
+  const [search, setSearch] = useState(null); // {q, hits:number[], capped, done, cur}
   const [statsOpen, setStatsOpen] = useState(false);
   const [customPhrase, setCustomPhrase] = useState("");
   const [showToBottom, setShowToBottom] = useState(false);
@@ -52,17 +57,21 @@ export default function ChatViewer({
   const chatRef = useRef(null);
   const searchInputRef = useRef(null);
   const marksRef = useRef([]);
-  const curIdxRef = useRef(-1);
   const jumpMarksRef = useRef([]);
+  const pendingRef = useRef(null);   // what to do with the scroll position after the next render
+  const lastAnchorRef = useRef(null); // first visible message, kept up to date while scrolling
+  const extendingRef = useRef(false);
+  const searchScrolledRef = useRef(null);
 
   // Reset per-chat UI state whenever another chat is opened.
   useEffect(() => {
-    setSearchOpen(false); setSearchQ(""); setJump(null); setInfoOpen(false);
+    setSearchOpen(false); setSearchQ(""); setSearch(null); setJump(null); setInfoOpen(false);
     setStatsOpen(false); setInsightsOpen(false); setReplayOpen(false); setCustomPhrase("");
   }, [chat?.id]);
 
   /* ---------- derived ---------- */
   const messages = useMemo(() => (chat?.text ? parseText(chat.text) : []), [chat?.id, chat?.text]);
+  const total = messages.length;
 
   const senders = useMemo(() => {
     const counts = {};
@@ -76,74 +85,139 @@ export default function ChatViewer({
     return senders.find((s) => s.toLowerCase() !== String(chat.name).toLowerCase()) || senders[0] || "";
   }, [chat, senders]);
 
+  // Lowercased per-message text, built lazily on first search / phrase count.
+  const corpusRef = useRef(null);
+  const getCorpus = useCallback(() => {
+    if (!corpusRef.current || corpusRef.current.msgs !== messages) corpusRef.current = { msgs: messages, list: buildSearchCorpus(messages) };
+    return corpusRef.current.list;
+  }, [messages]);
+  const dateIdxRef = useRef(null);
+
+  /* ---------- the render window [start, end) ---------- */
+  const [winState, setWinState] = useState({ msgs: null, start: 0, end: 0 });
+  let win = winState;
+  if (winState.msgs !== messages) {
+    win = { msgs: messages, ...initialWindow(total) };
+    pendingRef.current = { mode: "bottom" };
+  }
+  useEffect(() => {
+    if (winState.msgs !== messages) setWinState(win);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+  const winRef = useRef(win);
+  winRef.current = win;
+  const setWin = useCallback((w, pending) => {
+    pendingRef.current = pending || null;
+    setWinState({ msgs: messages, start: w.start, end: w.end });
+  }, [messages]);
+
   const mediaCount = Object.keys(mediaUrls).length;
-  // Re-render the (expensive) message HTML only when the SET of media changes;
+  // Re-render the message HTML only when the SET of media changes;
   // refreshed URLs for the same files are patched into the DOM in place below.
   const mediaNamesKey = useMemo(() => Object.keys(mediaUrls).sort().join("\n"), [mediaUrls]);
   const dlUrl = useCallback((name) => (downloadUrls && downloadUrls[name]) || mediaUrls[name], [downloadUrls, mediaUrls]);
 
+  // HTML for the window only (never the whole chat).
   const messagesHtml = useMemo(() => {
-    if (!messages.length) return "";
-    const preload = remote ? "none" : "metadata";
-    let html = "";
-    let lastDate = null, lastSender = null, lastType = null;
-    messages.forEach((msg, i) => {
-      if (msg.date !== lastDate) {
-        html += `<div class="day-divider" data-date="${escapeHtml(msg.date)}"><span>${formatDate(msg.date)}</span></div>`;
-        lastDate = msg.date; lastSender = null; lastType = null;
-      }
-      if (msg.system) {
-        html += `<div class="system-msg" data-i="${i}"><span>${formatText(msg.text)}</span></div>`;
-        lastSender = null; lastType = null;
-        return;
-      }
-      const out = msg.sender === me;
-      const first = msg.sender !== lastSender || lastType !== (out ? "out" : "in");
-      const showName = !out && first && senders.length > 2;
-      const emojiOnly = isEmojiOnly(msg.text);
-
-      // Media attachment — render it inline if we have the file.
-      const att = attachment(msg.text);
-      const name = att ? basename(att.name) : null;
-      const url = name ? mediaUrls[name] : null;
-      let body;
-      if (url) {
-        const kind = mediaKind(att.name);
-        const n = escapeHtml(name);
-        const u = escapeHtml(url);
-        const cap = att.caption ? `<span class="msg-text">${formatText(att.caption)}</span>` : "";
-        if (kind === "image")
-          body = `<a class="media-wrap" href="${u}" data-mh="${n}" target="_blank" rel="noopener"><img class="media-img" src="${u}" data-m="${n}" loading="lazy" decoding="async" alt=""></a>${cap}`;
-        else if (kind === "sticker")
-          body = `<img class="media-sticker" src="${u}" data-m="${n}" loading="lazy" decoding="async" alt="">${cap}`;
-        else if (kind === "video")
-          body = `<video class="media-vid" src="${u}" data-m="${n}" controls playsinline preload="${preload}"></video>${cap}`;
-        else if (kind === "audio")
-          body = `<audio class="media-aud" src="${u}" data-m="${n}" controls preload="${preload}"></audio>${cap}`;
-        else
-          body = `<a class="media-file" href="${escapeHtml(dlUrl(name))}" download="${n}"><span class="media-file-ic">📄</span><span>${escapeHtml(att.name)}</span></a>${cap}`;
-      } else {
-        body = `<span class="msg-text${emojiOnly ? " emoji-only" : ""}">${formatText(msg.text)}</span>`;
-      }
-
-      html += `<div class="row ${out ? "out" : "in"}${first ? " first" : ""}" data-i="${i}">
-        <div class="bubble">
-          ${showName ? `<div class="sender-name" style="color:${avatarColor(msg.sender)}">${escapeHtml(msg.sender)}</div>` : ""}
-          ${body}
-          <span class="meta">${escapeHtml(msg.time)}${out ? ' <span class="ticks">✓✓</span>' : ""}</span>
-        </div>
-      </div>`;
-      lastSender = msg.sender; lastType = out ? "out" : "in";
-    });
-    return html;
+    if (!total || win.end <= win.start) return "";
+    return renderWindowHtml(messages, win.start, win.end, { me, groupChat: senders.length > 2, mediaUrls, dlUrl, remote });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, me, senders, mediaNamesKey, remote]);
+  }, [messages, win.start, win.end, me, senders, mediaNamesKey, remote]);
 
-  // Swap refreshed media URLs into the existing DOM (keeps scroll position).
+  // Stable object: React re-applies innerHTML whenever this prop's identity
+  // changes, which would wipe search/jump highlights and flashes added to the
+  // DOM on unrelated re-renders (e.g. scroll state updates).
+  const chatInnerHtml = useMemo(() => ({ __html: messagesHtml }), [messagesHtml]);
+
+  /* ---------- scroll anchoring ---------- */
+  // First message row at/below the top edge, and its offset from the top.
+  const captureAnchor = useCallback(() => {
+    const el = chatRef.current;
+    if (!el) return null;
+    const rows = el.querySelectorAll("[data-i]");
+    if (!rows.length) return null;
+    const top = el.scrollTop;
+    let lo = 0, hi = rows.length - 1;
+    while (lo < hi) { // binary search on offsetTop (rows are in document order)
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].offsetTop + rows[mid].offsetHeight <= top) lo = mid + 1; else hi = mid;
+    }
+    const r = rows[lo];
+    return { i: Number(r.getAttribute("data-i")), offset: r.offsetTop - top };
+  }, []);
+
+  const flashIndex = useCallback((i, block = "center") => {
+    const el = chatRef.current?.querySelector(`[data-i="${i}"] .bubble, .system-msg[data-i="${i}"] span`);
+    if (!el) return false;
+    el.scrollIntoView({ block, behavior: "auto" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1900);
+    return true;
+  }, []);
+
+  // After every window/HTML change: restore or set the scroll position.
+  useLayoutEffect(() => {
+    const el = chatRef.current;
+    if (!el) return;
+    const p = pendingRef.current || (lastAnchorRef.current ? { mode: "anchor", ...lastAnchorRef.current } : { mode: "bottom" });
+    pendingRef.current = null;
+    if (p.mode === "bottom") el.scrollTop = el.scrollHeight;
+    else if (p.mode === "anchor") {
+      const row = el.querySelector(`[data-i="${p.i}"]`);
+      if (row) el.scrollTop = row.offsetTop - p.offset;
+    } else if (p.mode === "index") {
+      if (p.flash) flashIndex(p.i, p.block);
+      else el.querySelector(`[data-i="${p.i}"]`)?.scrollIntoView({ block: p.block || "center" });
+    } else if (p.mode === "date") {
+      el.querySelector(`.day-divider[data-date="${CSS.escape(p.date)}"]`)?.scrollIntoView({ block: "start" });
+    }
+    lastAnchorRef.current = captureAnchor();
+    extendingRef.current = false;
+    setShowToBottom(winRef.current.end < total || el.scrollHeight - el.scrollTop - el.clientHeight > 400);
+  }, [messagesHtml, captureAnchor, flashIndex, total]);
+
+  /** Make message `i` visible (recentring the window if needed), then scroll + flash. */
+  const ensureVisible = useCallback((i, { flash = true, block = "center" } = {}) => {
+    if (i == null || i < 0 || i >= total) return;
+    if (inWindow(winRef.current, i)) {
+      if (flash) flashIndex(i, block);
+      else chatRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block });
+      return;
+    }
+    setWin(windowAround(i, total), { mode: "index", i, flash, block });
+  }, [total, flashIndex, setWin]);
+
+  const scrollToLatest = useCallback(() => {
+    const el = chatRef.current;
+    if (winRef.current.end < total) setWin(initialWindow(total), { mode: "bottom" });
+    else el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [total, setWin]);
+
+  const onChatScroll = () => {
+    const el = chatRef.current;
+    if (!el) return;
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowToBottom(fromBottom > 400 || win.end < total);
+    if (extendingRef.current) return;
+    const anchor = captureAnchor();
+    lastAnchorRef.current = anchor;
+    const release = () => setTimeout(() => { extendingRef.current = false; }, 600); // safety net
+    if (el.scrollTop < 800 && win.start > 0) {
+      extendingRef.current = true;
+      release();
+      setWin(extendUp(win, total), anchor ? { mode: "anchor", ...anchor } : null);
+    } else if (fromBottom < 800 && win.end < total) {
+      extendingRef.current = true;
+      release();
+      setWin(extendDown(win, total), anchor ? { mode: "anchor", ...anchor } : null);
+    }
+  };
+
+  // Swap refreshed media URLs into the rendered window (keeps scroll position).
   useEffect(() => {
     const el = chatRef.current;
     if (!el) return;
-    el.querySelectorAll("[data-m]").forEach((node) => {
+    el.querySelectorAll("img[data-m], video[data-m], audio[data-m]").forEach((node) => {
       const url = mediaUrls[node.getAttribute("data-m")];
       if (url && node.getAttribute("src") !== url) node.setAttribute("src", url);
     });
@@ -151,7 +225,30 @@ export default function ChatViewer({
       const url = mediaUrls[node.getAttribute("data-mh")];
       if (url && node.getAttribute("href") !== url) node.setAttribute("href", url);
     });
-  }, [mediaUrls]);
+  }, [mediaUrls, messagesHtml]);
+
+  // Activity reporting (vault only): photo opens and doc downloads via click
+  // delegation, video/audio plays via the capture phase (play doesn't bubble).
+  useEffect(() => {
+    const el = chatRef.current;
+    if (!el || !onMediaEvent) return;
+    const onClick = (e) => {
+      const wrap = e.target.closest?.("a.media-wrap[data-mh]");
+      if (wrap) return onMediaEvent("MEDIA_VIEW", wrap.getAttribute("data-mh"));
+      const doc = e.target.closest?.("a.media-file[data-m]");
+      if (doc) onMediaEvent("DOC_DOWNLOAD", doc.getAttribute("data-m"));
+    };
+    const onPlay = (e) => {
+      const t = e.target;
+      const name = t?.getAttribute?.("data-m");
+      if (!name) return;
+      if (t instanceof HTMLVideoElement) onMediaEvent("VIDEO_PLAY", name);
+      else if (t instanceof HTMLAudioElement) onMediaEvent("AUDIO_PLAY", name);
+    };
+    el.addEventListener("click", onClick);
+    el.addEventListener("play", onPlay, true);
+    return () => { el.removeEventListener("click", onClick); el.removeEventListener("play", onPlay, true); };
+  }, [onMediaEvent, messagesHtml]);
 
   // Report broken media (e.g. an expired signed link) so the parent can refresh.
   useEffect(() => {
@@ -178,13 +275,12 @@ export default function ChatViewer({
     return () => clearTimeout(t);
   }, [statsOpen, messages]);
 
-  /* Custom phrase counter: debounced (350ms) + chunked scan over a cached
+  /* Custom phrase counter: debounced (350ms) + chunked scan over the cached
      lowercase corpus — typing never blocks, big chats show a counting state. */
   const [customStat, setCustomStat] = useState(null);
   const [customBusy, setCustomBusy] = useState(false);
-  const corpusRef = useRef(null);
   const scanCancelRef = useRef(null);
-  useEffect(() => { corpusRef.current = null; setCustomStat(null); setCustomBusy(false); }, [messages]);
+  useEffect(() => { setCustomStat(null); setCustomBusy(false); dateIdxRef.current = null; }, [messages]);
   useEffect(() => {
     scanCancelRef.current?.();
     const q = customPhrase.trim().toLowerCase();
@@ -193,23 +289,22 @@ export default function ChatViewer({
     let cancelled = false;
     scanCancelRef.current = () => { cancelled = true; };
     const deb = setTimeout(() => {
-      if (!corpusRef.current) corpusRef.current = messages.map((m) => (m.system ? null : m.text.toLowerCase()));
-      const lower = corpusRef.current;
+      const lower = getCorpus();
       const perSender = {}, perDay = {}, indices = [];
-      let total = 0, i = 0;
+      let totalN = 0, i = 0;
       const CHUNK = 25000;
       const step = () => {
         if (cancelled) return;
         const end = Math.min(lower.length, i + CHUNK);
         for (; i < end; i++) {
+          const m = messages[i];
+          if (m.system) continue;
           const t = lower[i];
-          if (!t) continue;
           let at = t.indexOf(q), n = 0;
           while (at !== -1) { n++; at = t.indexOf(q, at + q.length); }
           if (n) {
-            total += n;
+            totalN += n;
             if (indices.length < 2000) indices.push(i);
-            const m = messages[i];
             perSender[m.sender] = (perSender[m.sender] || 0) + n;
             perDay[m.date] = (perDay[m.date] || 0) + n;
           }
@@ -217,63 +312,45 @@ export default function ChatViewer({
         if (i < lower.length) setTimeout(step, 0); // yield to keep typing smooth
         else {
           const peak = Object.entries(perDay).sort((a, b) => b[1] - a[1])[0] || null;
-          setCustomStat({ total, perSender, indices, peakDay: peak ? { date: peak[0], count: peak[1] } : null });
+          setCustomStat({ total: totalN, perSender, indices, peakDay: peak ? { date: peak[0], count: peak[1] } : null });
           setCustomBusy(false);
         }
       };
       step();
     }, 350);
     return () => { clearTimeout(deb); cancelled = true; };
-  }, [customPhrase, messages]);
-
-  /* ---------- scroll ---------- */
-  useEffect(() => {
-    const el = chatRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messagesHtml]);
-
-  const onChatScroll = () => {
-    const el = chatRef.current;
-    if (el) setShowToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 400);
-  };
+  }, [customPhrase, messages, getCorpus]);
 
   /* ---------- jump-to-message (clickable stats) ---------- */
-  const scrollToIndex = useCallback((i) => {
-    const el = chatRef.current?.querySelector(`[data-i="${i}"] .bubble, .system-msg[data-i="${i}"] span`);
-    if (!el) return;
-    // smooth scrolling across a 90k-message DOM is very slow — jump instantly on big chats
-    el.scrollIntoView({ block: "center", behavior: messages.length > 8000 ? "auto" : "smooth" });
-    el.classList.add("flash");
-    setTimeout(() => el.classList.remove("flash"), 1900);
-  }, [messages.length]);
-
   const startJump = useCallback((label, indices, hlRe = null) => {
     if (!indices || !indices.length) return;
     setStatsOpen(false);
     setSearchOpen(false);
     setSearchQ("");
     setJump({ label, indices, idx: 0, hlRe });
-    setTimeout(() => scrollToIndex(indices[0]), 80);
-  }, [scrollToIndex]);
+    setTimeout(() => ensureVisible(indices[0]), 80);
+  }, [ensureVisible]);
 
-  /* highlight the matched word/phrase inside jumped-to messages */
-  const clearJumpMarks = () => {
-    jumpMarksRef.current.forEach((m) => {
+  /* highlight the matched word/phrase inside jumped-to messages (rendered window only) */
+  const clearMarks = (ref) => {
+    ref.current.forEach((m) => {
       const parent = m.parentNode;
       if (!parent) return;
       parent.replaceChild(document.createTextNode(m.textContent), m);
       parent.normalize();
     });
-    jumpMarksRef.current = [];
+    ref.current = [];
   };
 
   useEffect(() => {
-    clearJumpMarks();
+    clearMarks(jumpMarksRef);
     if (!jump?.hlRe || !chatRef.current) return;
     const flags = jump.hlRe.flags.includes("g") ? jump.hlRe.flags : jump.hlRe.flags + "g";
     const re = new RegExp(jump.hlRe.source, flags);
-    // cap highlighting work on huge match sets — navigation still covers all of them
-    for (const idx of jump.indices.slice(0, 400)) {
+    let done = 0;
+    for (const idx of jump.indices) {
+      if (!inWindow(win, idx)) continue;
+      if (++done > 400) break; // cap highlighting work; navigation still covers all
       const root = chatRef.current.querySelector(`[data-i="${idx}"] .msg-text`);
       if (!root) continue;
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
@@ -301,24 +378,26 @@ export default function ChatViewer({
       }
     }
     jumpMarksRef.current = Array.from(chatRef.current.querySelectorAll("mark.jhl"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jump?.label, jump?.hlRe, jump?.indices, messagesHtml]);
 
   const jumpStep = (dir) => {
-    setJump((j) => {
-      if (!j) return j;
-      const idx = (j.idx + dir + j.indices.length) % j.indices.length;
-      scrollToIndex(j.indices[idx]);
-      return { ...j, idx };
-    });
+    if (!jump) return;
+    const idx = (jump.idx + dir + jump.indices.length) % jump.indices.length;
+    setJump({ ...jump, idx });
+    ensureVisible(jump.indices[idx]);
   };
 
   const scrollToDate = useCallback((date) => {
     setStatsOpen(false);
+    if (!dateIdxRef.current) dateIdxRef.current = firstIndexByDate(messages);
+    const i = dateIdxRef.current.get(date);
+    if (i == null) return;
     setTimeout(() => {
-      const el = chatRef.current?.querySelector(`.day-divider[data-date="${CSS.escape(date)}"]`);
-      el?.scrollIntoView({ block: "start", behavior: "smooth" });
+      if (inWindow(winRef.current, i)) chatRef.current?.querySelector(`.day-divider[data-date="${CSS.escape(date)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+      else setWin(windowAround(i, total), { mode: "date", date });
     }, 80);
-  }, []);
+  }, [messages, total, setWin]);
 
   // build index lists lazily on click
   const phraseIndices = useCallback((re, sender = null, date = null) => {
@@ -333,40 +412,37 @@ export default function ChatViewer({
     return out;
   }, [messages]);
 
-  /* ---------- message search (direct DOM highlighting) ---------- */
-  const unhighlight = () => {
-    marksRef.current.forEach((m) => {
-      const parent = m.parentNode;
-      if (!parent) return;
-      parent.replaceChild(document.createTextNode(m.textContent), m);
-      parent.normalize();
-    });
-    marksRef.current = [];
-    curIdxRef.current = -1;
-  };
-
-  const setCurrent = () => {
-    marksRef.current.forEach((m) => m.classList.remove("cur"));
-    const m = marksRef.current[curIdxRef.current];
-    if (m) {
-      m.classList.add("cur");
-      m.scrollIntoView({ block: "center", behavior: marksRef.current.length > 500 || messages.length > 8000 ? "auto" : "smooth" });
-    }
-  };
-
+  /* ---------- message search: over the data, highlighted in the window ---------- */
+  // 1) chunked scan of the corpus → one hit (message index) per occurrence
   useEffect(() => {
-    const el = chatRef.current;
-    if (!el) return;
     const q = searchQ.trim().toLowerCase();
-    if (!q || !searchOpen) { unhighlight(); setMatchInfo({ cur: -1, total: 0 }); return; }
-    // debounce: walking a huge chat DOM on every keystroke would block typing
-    const deb = setTimeout(() => runDomSearch(el, q), messages.length > 8000 ? 350 : 120);
-    return () => clearTimeout(deb);
-  }, [searchQ, searchOpen, messagesHtml]);
+    if (!q || !searchOpen || !total) { setSearch(null); return; }
+    let cancelled = false;
+    const deb = setTimeout(() => {
+      const corpus = getCorpus();
+      const hits = [];
+      let i = 0;
+      const stepScan = () => {
+        if (cancelled) return;
+        i = scanChunk(corpus, q, i, i + 20000, hits);
+        if (i < corpus.length) { setTimeout(stepScan, 0); return; }
+        const cur = hits.length ? hits.length - 1 : -1; // start at the newest match
+        setSearch({ q, hits, capped: hits.length >= SEARCH_HIT_CAP, cur });
+        if (cur >= 0) ensureVisible(hits[cur], { flash: false });
+      };
+      stepScan();
+    }, total > 8000 ? 300 : 120);
+    return () => { cancelled = true; clearTimeout(deb); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQ, searchOpen, messages]);
 
-  const runDomSearch = (el, q) => {
-    unhighlight();
-    el.querySelectorAll(".msg-text, .system-msg span, .sender-name").forEach((root) => {
+  // 2) highlight occurrences inside the rendered window; mark + scroll to the current one
+  useEffect(() => {
+    clearMarks(marksRef);
+    const el = chatRef.current;
+    if (!el || !search?.hits.length) return;
+    const q = search.q;
+    el.querySelectorAll(".msg-text, .system-msg span, .media-file span:last-child").forEach((root) => {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
       const nodes = [];
       while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -390,19 +466,32 @@ export default function ChatViewer({
       }
     });
     marksRef.current = Array.from(el.querySelectorAll("mark.hl"));
-    if (marksRef.current.length) {
-      curIdxRef.current = marksRef.current.length - 1;
-      setCurrent();
+    if (search.cur >= 0) {
+      const i = search.hits[search.cur];
+      // Scroll to the current match only when it changes — not every time the
+      // window grows while the user scrolls with search open.
+      const key = `${search.q}|${search.cur}|${search.hits.length}`;
+      const shouldScroll = searchScrolledRef.current !== key;
+      const row = el.querySelector(`[data-i="${i}"]`);
+      if (row) {
+        const inRow = row.querySelectorAll("mark.hl");
+        const k = occurrenceInMessage(search.hits, search.cur);
+        const mark = inRow[Math.min(k, inRow.length - 1)];
+        if (mark) mark.classList.add("cur");
+        if (shouldScroll) {
+          (mark || row).scrollIntoView({ block: "center", behavior: "auto" });
+          searchScrolledRef.current = key;
+        }
+      }
     }
-    setMatchInfo({ cur: curIdxRef.current, total: marksRef.current.length });
-  };
+  }, [search, messagesHtml]);
 
   const step = (dir) => {
-    const n = marksRef.current.length;
-    if (!n) return;
-    curIdxRef.current = (curIdxRef.current + dir + n) % n;
-    setCurrent();
-    setMatchInfo({ cur: curIdxRef.current, total: n });
+    if (!search?.hits.length) return;
+    const n = search.hits.length;
+    const cur = (search.cur + dir + n) % n;
+    setSearch({ ...search, cur });
+    ensureVisible(search.hits[cur], { flash: false });
   };
 
   useEffect(() => {
@@ -421,8 +510,8 @@ export default function ChatViewer({
   const jumpToMessage = useCallback((i) => {
     setInfoOpen(false);
     setJump(null);
-    setTimeout(() => scrollToIndex(i), 90);
-  }, [scrollToIndex]);
+    setTimeout(() => ensureVisible(i), 90);
+  }, [ensureVisible]);
 
   /* ---------- Chat Wrapped PNG ---------- */
   const downloadWrapped = () => {
@@ -622,10 +711,14 @@ export default function ChatViewer({
             }}
           />
           <span className="count">
-            {searchQ.trim() ? (matchInfo.total ? `${matchInfo.cur + 1} of ${matchInfo.total}` : "No results") : ""}
+            {searchQ.trim()
+              ? search
+                ? search.hits.length ? `${(search.cur + 1).toLocaleString()} of ${search.hits.length.toLocaleString()}${search.capped ? "+" : ""}` : "No results"
+                : "Searching…"
+              : ""}
           </span>
-          <button title="Previous match (older)" disabled={matchInfo.total < 2} onClick={() => step(-1)}><IconUp size={18} /></button>
-          <button title="Next match (newer)" disabled={matchInfo.total < 2} onClick={() => step(1)}><IconDown size={18} /></button>
+          <button title="Previous match (older)" disabled={!search || search.hits.length < 2} onClick={() => step(-1)}><IconUp size={18} /></button>
+          <button title="Next match (newer)" disabled={!search || search.hits.length < 2} onClick={() => step(1)}><IconDown size={18} /></button>
           <button title="Close search" onClick={() => { setSearchOpen(false); setSearchQ(""); }}><IconClose size={18} /></button>
         </div>
       )}
@@ -652,7 +745,7 @@ export default function ChatViewer({
           </div>
         </div>
       ) : chat ? (
-        <div className="chat" ref={chatRef} onScroll={onChatScroll} dangerouslySetInnerHTML={{ __html: messagesHtml }} />
+        <div className="chat" ref={chatRef} onScroll={onChatScroll} dangerouslySetInnerHTML={chatInnerHtml} />
       ) : (
         <div className="chat chat-center">{emptyState}</div>
       )}
@@ -660,7 +753,7 @@ export default function ChatViewer({
       {showToBottom && chat && (
         <button
           className="to-bottom" title="Scroll to latest"
-          onClick={() => chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" })}
+          onClick={scrollToLatest}
         ><IconArrowDown size={18} /></button>
       )}
 
@@ -690,6 +783,7 @@ export default function ChatViewer({
           mediaUrls={mediaUrls}
           downloadUrls={downloadUrls}
           remote={remote}
+          onMediaEvent={onMediaEvent}
           onJump={jumpToMessage}
           onClose={() => setInfoOpen(false)}
         />

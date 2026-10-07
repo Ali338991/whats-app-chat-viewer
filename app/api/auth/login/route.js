@@ -1,5 +1,6 @@
 import { prisma } from "../../../../lib/prisma";
 import { json, error, readJson, handler } from "../../../../lib/api";
+import { logEvent } from "../../../../lib/audit";
 import {
   authConfigured, verifyPassword, normalizeEmail, setSessionCookie,
   publicUser, MAX_FAILED_LOGINS, LOCK_MINUTES, DUMMY_HASH,
@@ -27,6 +28,7 @@ export const POST = handler(async (request) => {
   }
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
+    await logEvent(request, user.id, { type: "LOGIN_FAILED", meta: { whileLocked: true } });
     return error(429, lockedMessage(user.lockedUntil), { lockedUntil: user.lockedUntil });
   }
 
@@ -39,16 +41,22 @@ export const POST = handler(async (request) => {
     if (updated.failedLogins >= MAX_FAILED_LOGINS) {
       const lockedUntil = new Date(Date.now() + LOCK_MINUTES * 60000);
       await prisma.user.update({ where: { id: user.id }, data: { lockedUntil, failedLogins: 0 } });
+      await logEvent(request, user.id, { type: "LOGIN_FAILED", meta: { locked: true } });
       return error(429, lockedMessage(lockedUntil), { lockedUntil });
     }
+    await logEvent(request, user.id, { type: "LOGIN_FAILED" });
     return error(401, INVALID);
   }
-  if (!user.active) return error(403, "This account has been disabled. Please contact support.");
+  if (!user.active) {
+    await logEvent(request, user.id, { type: "LOGIN_FAILED", meta: { disabled: true } });
+    return error(403, "This account has been disabled. Please contact support.");
+  }
 
   user = await prisma.user.update({
     where: { id: user.id },
     data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() },
   });
   await setSessionCookie(user);
+  await logEvent(request, user.id, { type: "LOGIN" });
   return json({ user: publicUser(user) });
 });

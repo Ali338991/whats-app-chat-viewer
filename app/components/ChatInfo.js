@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import {
   attachment, mediaKind, basename, formatDate, formatText,
   escapeHtml, initial, avatarColor,
@@ -12,7 +12,27 @@ function cleanUrl(u) {
   return u.replace(/[.,;:!?)\]}'"»]+$/, "");
 }
 
-export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, remote = false, onJump, onClose }) {
+// Grows a list in pages as a sentinel element scrolls into view, so huge chats
+// never mount thousands of tiles/rows at once.
+const MEDIA_PAGE = 90;
+const LIST_PAGE = 100;
+function useIncremental(totalCount, page, resetKey) {
+  const [count, setCount] = useState(page);
+  const sentinelRef = useRef(null);
+  useEffect(() => { setCount(page); }, [resetKey, page]);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || count >= totalCount) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setCount((c) => Math.min(totalCount, c + page));
+    }, { rootMargin: "600px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [count, totalCount, page]);
+  return [count, sentinelRef];
+}
+
+export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, remote = false, onMediaEvent, onJump, onClose }) {
   // Download links: in the vault these go through /api/vault/media/[id]?download=1
   // so the file is saved with its original name.
   const dl = (name, url) => (downloadUrls && downloadUrls[name]) || url;
@@ -45,6 +65,9 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
   }, [messages, mediaUrls]);
 
   const counts = { media: media.length, links: links.length, docs: docs.length };
+  const [mediaShown, mediaSentinel] = useIncremental(media.length, MEDIA_PAGE, `${tab}|${media.length}`);
+  const [linksShown, linksSentinel] = useIncremental(links.length, LIST_PAGE, `${tab}|${links.length}`);
+  const [docsShown, docsSentinel] = useIncremental(docs.length, LIST_PAGE, `${tab}|${docs.length}`);
 
   /* ---------- lightbox ---------- */
   const openViewer = useCallback((idx) => setViewer(idx), []);
@@ -68,6 +91,12 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
   }, [viewer, closeViewer, stepViewer, onClose]);
 
   const cur = viewer >= 0 ? media[viewer] : null;
+
+  // Activity reporting (vault only): a photo/sticker shown in the lightbox
+  // (opening it or navigating to it) counts as a view.
+  useEffect(() => {
+    if (cur && onMediaEvent && (cur.kind === "image" || cur.kind === "sticker")) onMediaEvent("MEDIA_VIEW", cur.name);
+  }, [cur, onMediaEvent]);
 
   const goToMessage = (i) => { onJump(i); onClose(); };
 
@@ -94,9 +123,9 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
         </div>
 
         {tab === "media" && (
-          media.length ? (
+          media.length ? (<>
             <div className="media-grid">
-              {media.map((m, idx) => (
+              {media.slice(0, mediaShown).map((m, idx) => (
                 <button key={m.i} className="media-cell" onClick={() => openViewer(idx)} title={`${m.sender} · ${formatDate(m.date)}`}>
                   {m.kind === "video" ? (
                     <>
@@ -106,18 +135,19 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
                       <span className="play-badge">▶</span>
                     </>
                   ) : (
-                    <img src={m.url} loading="lazy" alt="" />
+                    <img src={m.url} loading="lazy" decoding="async" alt="" />
                   )}
                 </button>
               ))}
             </div>
-          ) : <div className="info-empty">No photos or videos.<br /><small>Export the chat <b>with media</b> (as a .zip) to see them here.</small></div>
+            <div ref={mediaSentinel} className="list-sentinel" />
+          </>) : <div className="info-empty">No photos or videos.<br /><small>Export the chat <b>with media</b> (as a .zip) to see them here.</small></div>
         )}
 
         {tab === "links" && (
-          links.length ? (
+          links.length ? (<>
             <div className="info-list">
-              {links.map((l, idx) => (
+              {links.slice(0, linksShown).map((l, idx) => (
                 <div key={idx} className="link-row">
                   <a className="link-main" href={l.url} target="_blank" rel="noopener noreferrer">
                     <span className="link-host">{hostname(l.url)}</span>
@@ -130,25 +160,27 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
                 </div>
               ))}
             </div>
-          ) : <div className="info-empty">No links in this chat.</div>
+            <div ref={linksSentinel} className="list-sentinel" />
+          </>) : <div className="info-empty">No links in this chat.</div>
         )}
 
         {tab === "docs" && (
-          docs.length ? (
+          docs.length ? (<>
             <div className="info-list">
-              {docs.map((d, idx) => (
+              {docs.slice(0, docsShown).map((d, idx) => (
                 <div key={idx} className="doc-row">
                   <div className="doc-icon">📄</div>
                   <div className="doc-info">
                     <div className="doc-name">{d.name}</div>
                     <div className="doc-meta">{d.sender} · {formatDate(d.date)}</div>
                   </div>
-                  {d.url && <a className="doc-dl" href={dl(d.name, d.url)} download={d.name} title="Download">⬇</a>}
+                  {d.url && <a className="doc-dl" href={dl(d.name, d.url)} download={d.name} title="Download" onClick={() => onMediaEvent?.("DOC_DOWNLOAD", d.name)}>⬇</a>}
                   <button className="doc-jump" title="Show in chat" onClick={() => goToMessage(d.i)}>↪</button>
                 </div>
               ))}
             </div>
-          ) : <div className="info-empty">No documents in this chat.</div>
+            <div ref={docsSentinel} className="list-sentinel" />
+          </>) : <div className="info-empty">No documents in this chat.</div>
         )}
       </div>
 
@@ -170,9 +202,9 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
           <div className="lb-stage">
             {media.length > 1 && <button className="lb-nav prev" title="Previous" onClick={() => stepViewer(-1)}>‹</button>}
             {cur.kind === "video" ? (
-              <video key={cur.url} src={cur.url} controls autoPlay playsInline className="lb-media" />
+              <video key={cur.url} src={cur.url} controls autoPlay playsInline className="lb-media" onPlay={() => onMediaEvent?.("VIDEO_PLAY", cur.name)} />
             ) : (
-              <img key={cur.url} src={cur.url} alt="" className="lb-media" />
+              <img key={cur.url} src={cur.url} alt="" decoding="async" className="lb-media" />
             )}
             {media.length > 1 && <button className="lb-nav next" title="Next" onClick={() => stepViewer(1)}>›</button>}
           </div>

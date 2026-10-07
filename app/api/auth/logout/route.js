@@ -1,7 +1,11 @@
 import { json, handler } from "../../../../lib/api";
-import { clearSessionCookie } from "../../../../lib/auth";
+import { clearSessionCookie, getCurrentUser } from "../../../../lib/auth";
+import { logEvent } from "../../../../lib/audit";
 
-export const POST = handler(async () => {
+export const POST = handler(async (request) => {
+  let user = null;
+  try { user = await getCurrentUser(); } catch { /* sign out regardless */ }
   await clearSessionCookie();
+  if (user) await logEvent(request, user.id, { type: "LOGOUT" });
   return json({ ok: true });
 });

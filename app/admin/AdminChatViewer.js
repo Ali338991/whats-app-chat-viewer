@@ -47,7 +47,7 @@ export default function AdminChatViewer({ chatId, onBack }) {
     if (Date.now() - lastRefresh.current < 60_000) return;
     lastRefresh.current = Date.now();
     try {
-      const d = await getJson(`/api/admin/chats/${chatId}`);
+      const d = await getJson(`/api/admin/chats/${chatId}?refresh=1`);
       fetchedAt.current = Date.now();
       setMaps(buildMediaMaps(d, "/api/admin/media/"));
     } catch { /* keep the old links */ }

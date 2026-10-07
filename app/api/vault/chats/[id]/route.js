@@ -2,16 +2,20 @@ import { prisma } from "../../../../../lib/prisma";
 import { json, error, readJson, handler, serializeChat } from "../../../../../lib/api";
 import { requireUser } from "../../../../../lib/auth";
 import { ownedChat, buildChatDetail } from "../../../../../lib/vault";
+import { logChatOpen } from "../../../../../lib/audit";
 
 // GET /api/vault/chats/[id] — metadata, a presigned URL for the chat text, and
 // every media file with a ready-to-use presigned URL (valid 24h). The browser
 // fetches everything straight from storage; nothing is proxied through here.
-export const GET = handler(async (_request, { params }) => {
+// Logs CHAT_OPEN (skipped for ?refresh=1 link refreshes and repeats within 30 min).
+export const GET = handler(async (request, { params }) => {
   const { user, response } = await requireUser();
   if (response) return response;
   const { id } = await params;
   const chat = await ownedChat(user.id, id);
-  return json(await buildChatDetail(chat));
+  const detail = await buildChatDetail(chat);
+  await logChatOpen(request, user.id, chat);
+  return json(detail);
 });
 
 // PATCH /api/vault/chats/[id] — rename, or remember which sender is "me".

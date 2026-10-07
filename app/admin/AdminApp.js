@@ -13,6 +13,8 @@ import {
   IconChat, IconImage, IconUsers,
 } from "../components/Icons";
 
+import { UserLogins, UserActivity, AuditLog } from "./AuditViews";
+
 const AdminChatViewer = dynamic(() => import("./AdminChatViewer"), { ssr: false });
 
 const GB = 1024 ** 3;
@@ -216,13 +218,17 @@ function UserDetail({ userId, onBack, onOpen, onChanged }) {
           <div className="seg admin-seg">
             <button className={tab === "active" ? "on" : ""} onClick={() => setTab("active")}>Active · {active.length}</button>
             <button className={tab === "deleted" ? "on" : ""} onClick={() => setTab("deleted")}>Deleted · {removed.length}</button>
+            <button className={tab === "logins" ? "on" : ""} onClick={() => setTab("logins")}>Logins</button>
+            <button className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>Activity</button>
           </div>
-          <div className="admin-chat-list">
+          {tab === "logins" && <UserLogins userId={userId} />}
+          {tab === "activity" && <UserActivity userId={userId} />}
+          {(tab === "active" || tab === "deleted") && <div className="admin-chat-list">
             {chats && !shown.length && <div className="admin-empty">{tab === "active" ? "No active chats." : "No removed chats."}</div>}
             {shown.map((c) => (
               <ChatRow key={c.id} c={c} busy={busyId === c.id} onOpen={onOpen} onRestore={restore} onHardDelete={askHardDelete} />
             ))}
-          </div>
+          </div>}
         </>
       )}
       {dialog}
@@ -324,7 +330,7 @@ export default function AdminApp({ me }) {
   const [err, setErr] = useState("");
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState(null);
-  const [tab, setTab] = useState("users"); // users | deleted
+  const [tab, setTab] = useState("users"); // users | deleted | audit
   const [selectedUser, setSelectedUser] = useState(null);
   const [viewChat, setViewChat] = useState(null);
   const [removeUser, setRemoveUser] = useState(null);
@@ -390,6 +396,7 @@ export default function AdminApp({ me }) {
           <div className="seg admin-seg">
             <button className={tab === "users" ? "on" : ""} onClick={() => setTab("users")}>Users</button>
             <button className={tab === "deleted" ? "on" : ""} onClick={() => setTab("deleted")}>Deleted chats</button>
+            <button className={tab === "audit" ? "on" : ""} onClick={() => setTab("audit")}>Audit log</button>
           </div>
         )}
 
@@ -397,6 +404,8 @@ export default function AdminApp({ me }) {
           <UserDetail userId={selectedUser} onBack={() => { setSelectedUser(null); load(); }} onOpen={setViewChat} onChanged={load} />
         ) : tab === "deleted" ? (
           <DeletedChats onOpen={setViewChat} onChanged={load} />
+        ) : tab === "audit" ? (
+          <AuditLog users={users || []} />
         ) : (
           <>
             <div className="admin-head">
