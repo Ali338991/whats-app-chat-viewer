@@ -57,9 +57,11 @@ model Chat {
   totalBytes   BigInt      @default(0)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
+  deletedAt    DateTime? // set when the user removes the chat (soft delete); data stays until an admin purges it
   media        MediaFile[]
 
   @@index([userId])
+  @@index([deletedAt])
 }
 
 model MediaFile {

@@ -1,7 +1,7 @@
 import { prisma } from "../../../../../lib/prisma";
 import { json, error, readJson, handler } from "../../../../../lib/api";
 import { requireAdmin, hashPassword, setSessionCookie, passwordProblem, cleanName } from "../../../../../lib/auth";
-import { serializeAdminUser, parseLimit } from "../../../../../lib/adminUsers";
+import { serializeAdminUser, parseLimit, userUsage } from "../../../../../lib/adminUsers";
 import { deletePrefix, userPrefix } from "../../../../../lib/r2";
 
 async function findUser(id) {
@@ -62,11 +62,21 @@ export const PATCH = handler(async (request, { params }) => {
   // Changing your own password revokes your old sessions — keep this one signed in.
   if (self && revoke) await setSessionCookie(updated);
 
-  const agg = await prisma.chat.aggregate({ where: { userId: target.id }, _sum: { totalBytes: true }, _count: true });
-  return json({ user: serializeAdminUser(updated, Number(agg._sum.totalBytes || 0n), agg._count) });
+  return json({ user: serializeAdminUser(updated, await userUsage(target.id)) });
 });
 
-// DELETE /api/admin/users/[id] — delete all of the user's stored files, then the user.
+// GET /api/admin/users/[id] — one user with usage (active vs removed bytes).
+export const GET = handler(async (_request, { params }) => {
+  const { response } = await requireAdmin();
+  if (response) return response;
+  const { id } = await params;
+  const target = await findUser(id);
+  if (!target) return error(404, "User not found.");
+  return json({ user: serializeAdminUser(target, await userUsage(target.id)) });
+});
+
+// DELETE /api/admin/users/[id] — delete all of the user's stored files
+// (including chats they removed), then the user.
 export const DELETE = handler(async (_request, { params }) => {
   const { user: admin, response } = await requireAdmin();
   if (response) return response;

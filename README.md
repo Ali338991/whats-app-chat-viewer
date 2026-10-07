@@ -91,13 +91,12 @@ Copy `.env.example` to `.env.local` (for local dev) and set the same keys on Ver
 |---|---|
 | `DATABASE_URL` | Neon Postgres connection string (the pooled URL works) |
 | `AUTH_SECRET` | Session signing secret — `openssl rand -base64 32` |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | First-admin bootstrap credentials (see below) |
 | `SIGNUPS_ENABLED` | `true` (default) or `false` to close public sign-up |
 | `DEFAULT_STORAGE_LIMIT_GB` | Quota for new self-service accounts (default `5`; `0` = unlimited) |
-| `R2_ACCOUNT_ID` | Cloudflare account ID |
-| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | R2 API token credentials (Object Read & Write on the bucket) |
-| `R2_BUCKET` | Bucket name |
-| `R2_ENDPOINT` | *Optional* — override the S3 endpoint (e.g. a local MinIO for development) |
+| `S3_ENDPOINT` | S3 API endpoint — for R2: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (no bucket, no trailing slash) |
+| `S3_REGION` | `auto` for R2 |
+| `S3_BUCKET` | Bucket name |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | R2 API token credentials (Object Read & Write on the bucket) |
 
 > The old `CLOUDINARY_*` variables are no longer used — delete them from `.env.local` and Vercel.
 
@@ -119,7 +118,8 @@ to create a new migration.
 1. Cloudflare dashboard → **R2** → **Create bucket** (e.g. `keepsake-media`). Keep it private
    (no public access needed — everything uses signed URLs).
 2. **R2 → Manage API tokens → Create API token** with *Object Read & Write* for that bucket.
-   Copy the Access Key ID and Secret Access Key, plus your Account ID.
+   Copy the Access Key ID and Secret Access Key into `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`, and the
+   S3 API endpoint shown on that page (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`) into `S3_ENDPOINT`.
 3. **Bucket → Settings → CORS policy** — required so the browser can upload and read directly:
 
 ```json
@@ -149,22 +149,16 @@ Open http://localhost:3000.
 
 1. Push the repo to GitHub and import it at [vercel.com/new](https://vercel.com/new) (Next.js is auto-detected).
 2. In **Project Settings → Environment Variables**, add every variable from the table above
-   (`DATABASE_URL`, `AUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `R2_*`, and optionally
+   (`DATABASE_URL`, `AUTH_SECRET`, `S3_*`, and optionally
    `SIGNUPS_ENABLED` / `DEFAULT_STORAGE_LIMIT_GB`).
 3. Run the migrations against the production database once (and after every schema change):
    `DATABASE_URL="<neon url>" npm run db:migrate` from your machine.
 4. Deploy. The build runs `prisma generate && next build`.
 5. Add your production URL to the R2 CORS `AllowedOrigins`.
 
-## First admin (bootstrap)
-
-While the `User` table is empty, signing in at `/login` with exactly `ADMIN_EMAIL` /
-`ADMIN_PASSWORD` creates that account as **ADMIN** and signs you in. After that the env values are
-ignored for login (you can remove `ADMIN_PASSWORD` from the environment if you like).
-
 ## Admin
 
-`/admin` (admins only; linked from the user menu in the vault) lists every user with chat count
+`/admin` (admins only; linked from the user menu in the vault — an existing admin can promote any user) lists every user with chat count
 and storage used vs quota. Admins can:
 
 - create users (first name, last name, email, password, role, quota in GB) — works even when sign-ups are closed

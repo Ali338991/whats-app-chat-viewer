@@ -13,7 +13,7 @@ export const GET = handler(async (request, { params }) => {
   const { id } = await params;
   if (typeof id !== "string" || id.length > 64) return error(404, "Not found.");
   const media = await prisma.mediaFile.findFirst({
-    where: { id, chat: { userId: user.id } },
+    where: { id, chat: { userId: user.id, deletedAt: null } },
     select: { key: true, mime: true, name: true },
   });
   if (!media) return error(404, "Not found.");

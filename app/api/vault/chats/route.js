@@ -10,7 +10,7 @@ export const GET = handler(async () => {
   if (response) return response;
   await expireStaleUploads(user.id);
   const [chats, used] = await Promise.all([
-    prisma.chat.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" } }),
+    prisma.chat.findMany({ where: { userId: user.id, deletedAt: null }, orderBy: { createdAt: "desc" } }),
     usageBytes(user.id),
   ]);
   return json({

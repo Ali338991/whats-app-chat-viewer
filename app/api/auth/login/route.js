@@ -1,8 +1,7 @@
-import crypto from "node:crypto";
 import { prisma } from "../../../../lib/prisma";
 import { json, error, readJson, handler } from "../../../../lib/api";
 import {
-  authConfigured, verifyPassword, hashPassword, normalizeEmail, validEmail, setSessionCookie,
+  authConfigured, verifyPassword, normalizeEmail, setSessionCookie,
   publicUser, MAX_FAILED_LOGINS, LOCK_MINUTES, DUMMY_HASH,
 } from "../../../../lib/auth";
 
@@ -11,13 +10,6 @@ const INVALID = "Invalid email or password.";
 function lockedMessage(until) {
   const mins = Math.max(1, Math.ceil((until.getTime() - Date.now()) / 60000));
   return `Too many failed attempts. For your security this account is locked — try again in ${mins} minute${mins > 1 ? "s" : ""}.`;
-}
-
-// Constant-time string comparison (hash first so lengths match).
-function safeEqual(a, b) {
-  const ha = crypto.createHash("sha256").update(String(a)).digest();
-  const hb = crypto.createHash("sha256").update(String(b)).digest();
-  return crypto.timingSafeEqual(ha, hb);
 }
 
 export const POST = handler(async (request) => {
@@ -30,31 +22,6 @@ export const POST = handler(async (request) => {
   let user = await prisma.user.findUnique({ where: { email } });
 
   if (!user) {
-    // First-run bootstrap: with no users at all, ADMIN_EMAIL / ADMIN_PASSWORD create the first admin.
-    const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL);
-    const adminPass = process.env.ADMIN_PASSWORD || "";
-    if (adminEmail && adminPass && (await prisma.user.count()) === 0) {
-      const match = safeEqual(email, adminEmail) & safeEqual(password, adminPass);
-      if (match) {
-        if (!validEmail(adminEmail)) return error(500, "ADMIN_EMAIL is not a valid email address.");
-        try {
-          user = await prisma.user.create({
-            data: {
-              email: adminEmail,
-              passwordHash: await hashPassword(adminPass),
-              firstName: "Admin",
-              lastName: "",
-              role: "ADMIN",
-              lastLoginAt: new Date(),
-            },
-          });
-        } catch {
-          return error(409, "Setup is already complete — please sign in again.");
-        }
-        await setSessionCookie(user);
-        return json({ user: publicUser(user), bootstrapped: true });
-      }
-    }
     await verifyPassword(password, DUMMY_HASH); // equalize timing
     return error(401, INVALID);
   }
