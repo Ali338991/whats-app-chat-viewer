@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import ChatViewer from "../components/ChatViewer";
 import UploadPanel from "../components/UploadPanel";
 import ConfirmDialog from "../components/ConfirmDialog";
+import { ChangePasswordDialog } from "../components/AccountDialogs";
 import { formatDate, initial, avatarColor } from "../../lib/chat";
 import { formatBytes } from "../../lib/vaultUpload";
 import { useTheme } from "../../lib/useTheme";
@@ -18,7 +19,7 @@ import { getJson, buildMediaMaps, fetchText, REFRESH_AFTER_MS } from "../../lib/
 import { useMediaEventReporter } from "../../lib/mediaEvents";
 import {
   IconLogo, IconSun, IconMoon, IconUpload, IconTrash, IconLogout, IconUsers, IconSearch,
-  IconClose, IconAlert, IconEdit, IconImage, IconChat, IconCloud, IconLock,
+  IconClose, IconAlert, IconEdit, IconImage, IconChat, IconCloud, IconLock, IconKey,
 } from "../components/Icons";
 
 // Downloaded chat texts kept in memory: 1 on touch/mobile devices (tight
@@ -49,6 +50,7 @@ export default function VaultApp({ user }) {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
 
   const textCache = useRef(new Map()); // id -> text (small LRU)
@@ -285,6 +287,7 @@ export default function VaultApp({ user }) {
                     <small>{user.email}</small>
                   </div>
                   {user.role === "ADMIN" && <Link className="menu-item" href="/admin"><IconUsers size={17} /> Admin</Link>}
+                  <button className="menu-item" onClick={() => { setMenuOpen(false); setPwOpen(true); }}><IconKey size={17} /> Change password</button>
                   <Link className="menu-item" href="/"><IconLock size={17} /> Private local mode</Link>
                   <button className="menu-item" onClick={signOut}><IconLogout size={17} /> Sign out</button>
                 </div>
@@ -404,6 +407,8 @@ export default function VaultApp({ user }) {
           </div>
         </div>
       )}
+
+      {pwOpen && <ChangePasswordDialog onClose={() => setPwOpen(false)} />}
 
       {dragging && !uploadBusy && (
         <div className="drop-overlay">

@@ -49,7 +49,7 @@ export const POST = handler(async (request) => {
   }
   if (!user.active) {
     await logEvent(request, user.id, { type: "LOGIN_FAILED", meta: { disabled: true } });
-    return error(403, "This account has been disabled. Please contact support.");
+    return error(403, "This account has been blocked. Please contact support.");
   }
 
   user = await prisma.user.update({

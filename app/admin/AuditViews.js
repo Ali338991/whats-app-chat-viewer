@@ -91,7 +91,7 @@ function LoadMore({ feed }) {
 }
 
 /* ======================= Logins ======================= */
-const LOGIN_LABEL = { LOGIN: "Signed in", SIGNUP: "Signed up", LOGOUT: "Signed out", LOGIN_FAILED: "Failed attempt" };
+const LOGIN_LABEL = { LOGIN: "Signed in", SIGNUP: "Signed up", LOGOUT: "Signed out", LOGIN_FAILED: "Failed attempt", PASSWORD_CHANGE: "Changed password" };
 
 export function UserLogins({ userId }) {
   const feed = useFeed(`/api/admin/users/${userId}/logins`);
@@ -253,12 +253,27 @@ export function UserActivity({ userId }) {
 /* ======================= Global audit log ======================= */
 const AUDIT_FILTERS = [
   ["", "All events"], ["ADMIN", "Admin actions"], ["LOGIN", "Sign-ins"], ["LOGIN_FAILED", "Failed sign-ins"],
-  ["SIGNUP", "Sign-ups"], ["LOGOUT", "Sign-outs"], ["CHAT_OPEN", "Chats opened"], ["MEDIA_VIEW", "Photos viewed"],
+  ["SIGNUP", "Sign-ups"], ["LOGOUT", "Sign-outs"], ["PASSWORD_CHANGE", "Password changes"], ["CHAT_OPEN", "Chats opened"], ["MEDIA_VIEW", "Photos viewed"],
   ["VIDEO_PLAY", "Videos played"], ["AUDIO_PLAY", "Audio played"], ["DOC_DOWNLOAD", "Documents downloaded"],
   ["ADMIN_CHAT_OPEN", "Admin opened chat"], ["ADMIN_CHAT_RESTORE", "Admin restored chat"], ["ADMIN_CHAT_DELETE", "Admin deleted chat"],
   ["ADMIN_PURGE", "Admin purge"], ["ADMIN_USER_CREATE", "Admin created user"], ["ADMIN_USER_UPDATE", "Admin updated user"],
   ["ADMIN_USER_DELETE", "Admin deleted user"],
 ];
+
+// Human-readable summary of an ADMIN_USER_UPDATE (never includes passwords).
+function userChanges(meta) {
+  const c = meta?.changes || {};
+  const parts = (meta?.fields || []).map((f) => {
+    if (f === "active") return c.active ? "unblocked" : "blocked";
+    if (f === "email") return `email ${meta?.email ? meta.email + " → " : "→ "}${c.email}`;
+    if (f === "password") return "set a new password";
+    if (f === "unlocked") return "unlocked";
+    if (f === "role") return `role → ${String(c.role || "").toLowerCase()}`;
+    if (f === "storageLimitBytes") return "storage quota";
+    return f;
+  });
+  return parts.join(", ") || "no changes";
+}
 
 function describe(e) {
   const chat = <b>{e.chatName || "a chat"}</b>;
@@ -267,13 +282,14 @@ function describe(e) {
     case "LOGIN": return "signed in";
     case "SIGNUP": return "signed up";
     case "LOGOUT": return "signed out";
-    case "LOGIN_FAILED": return <>failed to sign in{e.meta?.locked ? " — account locked" : e.meta?.whileLocked ? " (while locked)" : e.meta?.disabled ? " (account disabled)" : ""}</>;
+    case "PASSWORD_CHANGE": return "changed their password";
+    case "LOGIN_FAILED": return <>failed to sign in{e.meta?.locked ? " — account locked" : e.meta?.whileLocked ? " (while locked)" : e.meta?.disabled ? " (account blocked)" : ""}</>;
     case "ADMIN_CHAT_OPEN": return <>opened {tgt}&apos;s chat {chat}</>;
     case "ADMIN_CHAT_RESTORE": return <>restored {tgt}&apos;s chat {chat}</>;
     case "ADMIN_CHAT_DELETE": return <>permanently deleted {tgt}&apos;s chat {chat}</>;
     case "ADMIN_PURGE": return <>purged {e.meta?.count ?? "?"} deleted chat{e.meta?.count === 1 ? "" : "s"} older than {e.meta?.days ?? "?"} days</>;
     case "ADMIN_USER_CREATE": return <>created user {tgt}</>;
-    case "ADMIN_USER_UPDATE": return <>updated {tgt}: {(e.meta?.fields || []).join(", ")}</>;
+    case "ADMIN_USER_UPDATE": return <>updated {tgt}: {userChanges(e.meta)}</>;
     case "ADMIN_USER_DELETE": return <>deleted user <b>{e.meta?.email || "unknown"}</b></>;
     default: return activityText(e);
   }

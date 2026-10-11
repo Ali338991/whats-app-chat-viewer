@@ -4,13 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import ConfirmDialog from "../components/ConfirmDialog";
+import { SetPasswordDialog, ChangeEmailDialog } from "../components/AccountDialogs";
 import { formatBytes } from "../../lib/vaultUpload";
 import { initial, avatarColor } from "../../lib/chat";
 import { useTheme } from "../../lib/useTheme";
 import { BRAND_NAME } from "../../lib/brand";
 import {
   IconLogo, IconSun, IconMoon, IconBack, IconPlus, IconTrash, IconKey, IconAlert, IconLock, IconClose, IconEye, IconEyeOff,
-  IconChat, IconImage, IconUsers,
+  IconChat, IconImage, IconUsers, IconEdit, IconCheck,
 } from "../components/Icons";
 
 import { UserLogins, UserActivity, AuditLog } from "./AuditViews";
@@ -198,7 +199,7 @@ function UserDetail({ userId, onBack, onOpen, onChanged }) {
             <span className="avatar lg" style={{ background: avatarColor(fullName(user)) }}>{initial(fullName(user))}</span>
             <div className="up-id">
               <h1>{fullName(user)}</h1>
-              <p>{user.email} · {user.role === "ADMIN" ? "Admin" : "User"}{user.active ? "" : " · Disabled"} · joined {fmtDate(user.createdAt)} · last sign-in {fmtDate(user.lastLoginAt)}</p>
+              <p>{user.email} · {user.role === "ADMIN" ? "Admin" : "User"}{user.active ? "" : " · Blocked"} · joined {fmtDate(user.createdAt)} · last sign-in {fmtDate(user.lastLoginAt)}</p>
             </div>
           </div>
           <div className="usage-cards">
@@ -334,6 +335,15 @@ export default function AdminApp({ me }) {
   const [selectedUser, setSelectedUser] = useState(null);
   const [viewChat, setViewChat] = useState(null);
   const [removeUser, setRemoveUser] = useState(null);
+  const [pwUser, setPwUser] = useState(null);
+  const [emailUser, setEmailUser] = useState(null);
+  const [blockUser, setBlockUser] = useState(null);
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 4500);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const load = useCallback(async () => {
     try { setUsers((await api("/api/admin/users")).users); setErr(""); }
@@ -346,16 +356,23 @@ export default function AdminApp({ me }) {
     try {
       const d = await api(`/api/admin/users/${u.id}`, "PATCH", body);
       setUsers((list) => list.map((x) => (x.id === u.id ? d.user : x)));
-      if (okMsg) alert(okMsg);
-    } catch (e) { alert(e.message); }
+      if (okMsg) setNotice(okMsg);
+      return true;
+    } catch (e) { alert(e.message); return false; }
     finally { setBusyId(null); }
   };
 
-  const resetPassword = (u) => {
-    const pw = prompt(`New password for ${u.email} (8–72 characters).\nThis signs them out everywhere.`);
-    if (pw == null) return;
-    if (pw.length < 8 || pw.length > 72) { alert("Password must be 8–72 characters."); return; }
-    patch(u, { password: pw }, "Password updated.");
+  // Shared by the password / email dialogs.
+  const onUserSaved = (updated, msg) => {
+    setUsers((list) => list.map((x) => (x.id === updated.id ? updated : x)));
+    setPwUser(null);
+    setEmailUser(null);
+    setNotice(msg);
+  };
+
+  const doBlock = async () => {
+    const u = blockUser;
+    if (await patch(u, { active: false }, `${u.email} is blocked and has been signed out.`)) setBlockUser(null);
   };
 
   const editQuota = (u) => {
@@ -417,6 +434,7 @@ export default function AdminApp({ me }) {
             </div>
 
             {err && <div className="alert alert-error"><IconAlert size={18} /><div>{err}</div></div>}
+            {notice && <div className="alert alert-info" role="status"><IconCheck size={18} /><div>{notice}</div></div>}
             {!users && !err && <div className="admin-loading"><div className="spinner" /></div>}
 
             {users && (
@@ -435,7 +453,7 @@ export default function AdminApp({ me }) {
                         </div>
                         <div className="uc-badges">
                           {u.role === "ADMIN" && <span className="badge badge-accent">Admin</span>}
-                          {!u.active && <span className="badge badge-error">Disabled</span>}
+                          {!u.active && <span className="badge badge-error">Blocked</span>}
                           {u.locked && <span className="badge badge-warn">Locked</span>}
                         </div>
                       </button>
@@ -450,7 +468,8 @@ export default function AdminApp({ me }) {
                       <div className="uc-meta">Joined {fmtDate(u.createdAt)} · Last sign-in {fmtDate(u.lastLoginAt)}</div>
                       <div className="uc-actions">
                         <button className="btn btn-ghost btn-xs" onClick={() => setSelectedUser(u.id)}><IconChat size={14} /> Chats</button>
-                        <button className="btn btn-ghost btn-xs" onClick={() => resetPassword(u)}><IconKey size={14} /> Password</button>
+                        <button className="btn btn-ghost btn-xs" onClick={() => setEmailUser(u)}><IconEdit size={14} /> Email</button>
+                        <button className="btn btn-ghost btn-xs" onClick={() => setPwUser(u)}><IconKey size={14} /> Password</button>
                         <button className="btn btn-ghost btn-xs" onClick={() => editQuota(u)}>Quota</button>
                         {!self && (
                           <button className="btn btn-ghost btn-xs" onClick={() => patch(u, { role: u.role === "ADMIN" ? "USER" : "ADMIN" })}>
@@ -459,7 +478,9 @@ export default function AdminApp({ me }) {
                         )}
                         {u.locked && <button className="btn btn-ghost btn-xs" onClick={() => patch(u, { unlock: true })}><IconLock size={14} /> Unlock</button>}
                         {!self && (
-                          <button className="btn btn-ghost btn-xs" onClick={() => patch(u, { active: !u.active })}>{u.active ? "Disable" : "Enable"}</button>
+                          u.active
+                            ? <button className="btn btn-ghost btn-xs" onClick={() => setBlockUser(u)}><IconLock size={14} /> Block</button>
+                            : <button className="btn btn-ghost btn-xs" onClick={() => patch(u, { active: true }, `${u.email} is unblocked and can sign in again.`)}>Unblock</button>
                         )}
                         {!self && (
                           <button className="btn btn-danger btn-xs" onClick={() => setRemoveUser(u)}><IconTrash size={14} /> Delete</button>
@@ -478,6 +499,19 @@ export default function AdminApp({ me }) {
         <CreateUser
           onClose={() => setCreating(false)}
           onCreated={(u) => { setCreating(false); setUsers((list) => [...(list || []), u]); }}
+        />
+      )}
+      {pwUser && <SetPasswordDialog user={pwUser} onClose={() => setPwUser(null)} onSaved={onUserSaved} />}
+      {emailUser && <ChangeEmailDialog user={emailUser} onClose={() => setEmailUser(null)} onSaved={onUserSaved} />}
+      {blockUser && (
+        <ConfirmDialog
+          title={`Block ${blockUser.email}?`}
+          message={<>They&apos;ll be signed out on every device right away and won&apos;t be able to sign in until you unblock them. Their chats and files are kept.</>}
+          confirmLabel="Block user"
+          danger
+          busy={busyId === blockUser.id}
+          onCancel={() => setBlockUser(null)}
+          onConfirm={doBlock}
         />
       )}
       {removeUser && (

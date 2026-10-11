@@ -8,7 +8,7 @@ import { BRAND_NAME } from "../../lib/brand";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-function PasswordInput({ id, value, onChange, autoComplete, placeholder, invalid, onBlur }) {
+export function PasswordInput({ id, value, onChange, autoComplete, placeholder, invalid, onBlur }) {
   const [show, setShow] = useState(false);
   return (
     <div className={`input-wrap${invalid ? " invalid" : ""}`}>
@@ -91,7 +91,7 @@ export function LoginForm() {
 }
 
 /* ======================= Sign up ======================= */
-function strength(pw) {
+export function strength(pw) {
   if (!pw) return null;
   let score = 0;
   if (pw.length >= 8) score++;
@@ -104,6 +104,17 @@ function strength(pw) {
   if (score === 3) return { level: 2, label: "Okay — a bit longer would be stronger" };
   if (score === 4) return { level: 3, label: "Strong" };
   return { level: 4, label: "Very strong" };
+}
+
+export function StrengthMeter({ password }) {
+  const st = strength(password);
+  if (!st) return null;
+  return (
+    <div className={`strength s${st.level}`}>
+      <div className="strength-bars">{[0, 1, 2, 3].map((i) => <i key={i} className={i < st.level ? "on" : ""} />)}</div>
+      <small>{st.label}</small>
+    </div>
+  );
 }
 
 export function SignupForm({ enabled = true }) {

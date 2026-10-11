@@ -1,6 +1,6 @@
 import { prisma } from "../../../../../lib/prisma";
 import { json, error, readJson, handler } from "../../../../../lib/api";
-import { requireAdmin, hashPassword, setSessionCookie, passwordProblem, cleanName } from "../../../../../lib/auth";
+import { requireAdmin, hashPassword, setSessionCookie, passwordProblem, cleanName, normalizeEmail, validEmail } from "../../../../../lib/auth";
 import { serializeAdminUser, parseLimit, userUsage } from "../../../../../lib/adminUsers";
 import { deletePrefix, userPrefix } from "../../../../../lib/r2";
 import { logEvent } from "../../../../../lib/audit";
@@ -11,7 +11,7 @@ async function findUser(id) {
 }
 
 // PATCH /api/admin/users/[id]
-// { firstName?, lastName?, role?, active?, storageLimitBytes?, password?, unlock? }
+// { firstName?, lastName?, email?, role?, active?, storageLimitBytes?, password?, unlock? }
 export const PATCH = handler(async (request, { params }) => {
   const { user: admin, response } = await requireAdmin();
   if (response) return response;
@@ -31,6 +31,14 @@ export const PATCH = handler(async (request, { params }) => {
     data.firstName = v;
   }
   if (b.lastName !== undefined) data.lastName = cleanName(b.lastName);
+  if (b.email !== undefined) {
+    const email = normalizeEmail(b.email);
+    if (!validEmail(email)) return error(400, "Enter a valid email address.");
+    if (email !== target.email) {
+      if (await prisma.user.findUnique({ where: { email } })) return error(409, "That email is already used by another account.");
+      data.email = email; // they sign in with the new email from now on
+    }
+  }
   if (b.role !== undefined) {
     if (b.role !== "ADMIN" && b.role !== "USER") return error(400, "Invalid role.");
     if (self && b.role !== "ADMIN") return error(400, "You can't remove your own admin role.");
@@ -59,13 +67,19 @@ export const PATCH = handler(async (request, { params }) => {
   if (b.unlock) { data.failedLogins = 0; data.lockedUntil = null; }
   if (revoke) data.sessionVersion = { increment: 1 };
 
-  const updated = await prisma.user.update({ where: { id: target.id }, data });
+  let updated;
+  try {
+    updated = await prisma.user.update({ where: { id: target.id }, data });
+  } catch (e) {
+    if (e?.code === "P2002") return error(409, "That email is already used by another account.");
+    throw e;
+  }
   // Changing your own password revokes your old sessions — keep this one signed in.
   if (self && revoke) await setSessionCookie(updated);
 
   // Audit: which fields changed (new values, never the password itself).
   const changes = {};
-  for (const k of ["firstName", "lastName", "role", "active"]) if (k in data && data[k] !== target[k]) changes[k] = data[k];
+  for (const k of ["firstName", "lastName", "email", "role", "active"]) if (k in data && data[k] !== target[k]) changes[k] = data[k];
   if ("storageLimitBytes" in data) {
     const before = target.storageLimitBytes == null ? null : Number(target.storageLimitBytes);
     const after = data.storageLimitBytes == null ? null : Number(data.storageLimitBytes);

@@ -989,6 +989,12 @@ video.lb-media { background: #000; }
 .confirm-ic.danger { background: var(--danger-soft); color: var(--danger); }
 .confirm-modal .confirm-title { display: block; font-size: 18px; margin-bottom: 8px; }
 .confirm-msg { font-size: 14px; line-height: 1.6; color: var(--text-secondary); }
+/* account dialogs (change password / set password / change email) */
+.dialog-sub { font-size: 13.5px; line-height: 1.55; color: var(--text-secondary); margin: -4px 0 14px; }
+.dialog-done { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 8px 0 2px; }
+.dialog-done-ic { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent-soft, rgba(99,91,255,.12)); color: var(--accent); margin-bottom: 4px; }
+.dialog-done b { font-size: 16px; }
+.dialog-done p { font-size: 13.5px; color: var(--text-secondary); line-height: 1.55; margin-bottom: 10px; }
 .confirm-modal .field { text-align: left; }
 .confirm-actions { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
 .confirm-actions .btn { min-width: 120px; }
