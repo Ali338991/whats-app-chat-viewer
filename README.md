@@ -1,8 +1,8 @@
-# Keepsake
+# KeepChats
 
 **Your conversations, kept safe forever.**
 
-Keepsake turns WhatsApp chat exports into a beautiful, searchable archive. People export a chat
+KeepChats turns WhatsApp chat exports into a beautiful, searchable archive. People export a chat
 (a `.zip` with all its media — often 400–700 MB or more), upload it once to a password-protected
 vault, delete it from their phone, and later sign in from any browser to relive the whole
 conversation: every message, photo, video, voice note and document.
@@ -116,7 +116,7 @@ to create a new migration.
 
 ### 3. Cloudflare R2
 
-1. Cloudflare dashboard → **R2** → **Create bucket** (e.g. `keepsake-media`). Keep it private
+1. Cloudflare dashboard → **R2** → **Create bucket** (e.g. `keepchats-media`). Keep it private
    (no public access needed — everything uses signed URLs).
 2. **R2 → Manage API tokens → Create API token** with *Object Read & Write* for that bucket.
    Copy the Access Key ID and Secret Access Key into `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`, and the
@@ -126,7 +126,7 @@ to create a new migration.
 ```json
 [
   {
-    "AllowedOrigins": ["https://YOUR-APP.vercel.app", "http://localhost:3000"],
+    "AllowedOrigins": ["https://keepchats.vercel.app", "http://localhost:3000"],
     "AllowedMethods": ["GET", "PUT", "HEAD"],
     "AllowedHeaders": ["*"],
     "ExposeHeaders": ["ETag"],

@@ -1,4 +1,4 @@
-// Keepsake — database schema (PostgreSQL / Neon).
+// KeepChats — database schema (PostgreSQL / Neon).
 // The client is generated into lib/generated/prisma (gitignored) by `prisma generate`.
 
 generator client {
