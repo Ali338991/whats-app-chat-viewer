@@ -193,6 +193,26 @@ Admin API: `GET /api/admin/users/[id]/chats`, `GET /api/admin/chats?deleted=1`,
 
 An admin can't delete, disable or demote themselves.
 
+## Deleting media
+
+Media can be deleted from the chat screen (trash chip on any photo, video, voice note or
+document), from the Chat Info lightbox, or in bulk from Chat Info → Media / Docs ("Select" →
+pick files or "Select all" → Delete). Local mode has no delete UI.
+
+- **Users (soft delete)** — `POST /api/vault/chats/[id]/media/delete {mediaIds}` (≤500 per call)
+  sets `MediaFile.deletedAt`. The files disappear for the user (chat detail, Chat Info, media
+  route → 404, activity events ignored) and the message shows a "Photo deleted" style placeholder.
+  They **stop counting toward the user's storage quota**; the stored objects stay in R2. Logged as
+  `MEDIA_DELETE` (count only).
+- **Admins (permanent)** — `POST /api/admin/chats/[id]/media/delete {mediaIds}` works on any chat,
+  including files a user already deleted (shown to admins with a "Deleted by user" badge). The R2
+  objects are deleted first; only if that succeeds are the database rows removed and the chat's
+  media count / size decremented, so a storage failure is safe to retry. Every audit event that
+  referenced those files has its media id and name **scrubbed**, and the deletion is logged as
+  `ADMIN_MEDIA_DELETE` with a count only — no trace of the deleted files remains.
+
+Admin usage shows active storage vs removed (deleted chats + user-deleted media).
+
 ## Audit log
 
 Every account has a permanent activity record, visible to admins in `/admin` (user → **Logins** /

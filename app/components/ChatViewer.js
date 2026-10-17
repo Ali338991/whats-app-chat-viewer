@@ -12,9 +12,10 @@ import {
 } from "../../lib/chat";
 import {
   initialWindow, extendUp, extendDown, windowAround, inWindow, renderWindowHtml,
-  buildSearchCorpus, scanChunk, occurrenceInMessage, firstIndexByDate, SEARCH_HIT_CAP,
+  buildSearchCorpus, scanChunk, occurrenceInMessage, firstIndexByDate, SEARCH_HIT_CAP, mediaLabel,
 } from "../../lib/chatWindow";
 import { BRAND_NAME } from "../../lib/brand";
+import ConfirmDialog from "./ConfirmDialog";
 import { IconBack, IconSparkles, IconChart, IconSearch, IconInfo, IconClose, IconUp, IconDown, IconArrowDown } from "./Icons";
 
 // Lazy-loaded heavy views (client-only, no SSR)
@@ -37,11 +38,17 @@ const ChatInfo = dynamic(() => import("./ChatInfo"), { ssr: false });
  * @param {Function} [props.onMediaError] a media element failed to load (e.g. expired link)
  * @param {Function} [props.onMediaEvent] (type, mediaName) — photo view / video+audio play / doc
  *        download, for the vault's activity log. Only /vault passes it.
+ * @param {{mode:"soft"|"hard", onDelete:(names:string[])=>Promise}} [props.mediaDelete]
+ *        enables deleting media (vault: soft, admin: hard). onDelete is called per chunk
+ *        of ≤500 names and should throw on failure. Absent in local mode → no delete UI.
+ * @param {string[]} [props.deletedMedia] file names deleted from the chat (placeholder shown)
+ * @param {string[]} [props.flaggedMedia] file names the user deleted, still visible (admin view)
  * @param {React.ReactNode} [props.emptyState]
  */
 export default function ChatViewer({
   chat, mediaUrls = {}, downloadUrls, remote = false, loading = null,
   onBack, onSetMe, onMediaError, onMediaEvent, emptyState = null,
+  mediaDelete = null, deletedMedia = null, flaggedMedia = null,
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQ, setSearchQ] = useState("");
@@ -117,12 +124,23 @@ export default function ChatViewer({
   const mediaNamesKey = useMemo(() => Object.keys(mediaUrls).sort().join("\n"), [mediaUrls]);
   const dlUrl = useCallback((name) => (downloadUrls && downloadUrls[name]) || mediaUrls[name], [downloadUrls, mediaUrls]);
 
+  // Deleted / flagged media as Sets (identity changes only when the contents do).
+  const deletedKey = (deletedMedia || []).join("\n");
+  const flaggedKey = (flaggedMedia || []).join("\n");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const deletedSet = useMemo(() => new Set(deletedMedia || []), [deletedKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const flaggedSet = useMemo(() => new Set(flaggedMedia || []), [flaggedKey]);
+
   // HTML for the window only (never the whole chat).
   const messagesHtml = useMemo(() => {
     if (!total || win.end <= win.start) return "";
-    return renderWindowHtml(messages, win.start, win.end, { me, groupChat: senders.length > 2, mediaUrls, dlUrl, remote });
+    return renderWindowHtml(messages, win.start, win.end, {
+      me, groupChat: senders.length > 2, mediaUrls, dlUrl, remote,
+      deleted: deletedSet, flagged: flaggedSet, canDelete: !!mediaDelete,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, win.start, win.end, me, senders, mediaNamesKey, remote]);
+  }, [messages, win.start, win.end, me, senders, mediaNamesKey, remote, deletedSet, flaggedSet, !!mediaDelete]);
 
   // Stable object: React re-applies innerHTML whenever this prop's identity
   // changes, which would wipe search/jump highlights and flashes added to the
@@ -249,6 +267,66 @@ export default function ChatViewer({
     el.addEventListener("play", onPlay, true);
     return () => { el.removeEventListener("click", onClick); el.removeEventListener("play", onPlay, true); };
   }, [onMediaEvent, messagesHtml]);
+
+  /* ---------- media deletion (vault: soft, admin: hard) ---------- */
+  const [delAsk, setDelAsk] = useState(null); // {names, resolve}
+  const [delProgress, setDelProgress] = useState(null); // {done, total}
+  const [notice, setNotice] = useState(null); // {text, error}
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), notice.error ? 6000 : 3500);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  // Ask for confirmation; resolves true when the files were deleted.
+  const requestDelete = useCallback((names) => new Promise((resolve) => {
+    const list = [...new Set(names)].filter(Boolean);
+    if (!list.length || !mediaDelete) return resolve(false);
+    setDelAsk({ names: list, resolve });
+  }), [mediaDelete]);
+
+  const cancelDelete = useCallback(() => {
+    if (delProgress) return;
+    delAsk?.resolve(false);
+    setDelAsk(null);
+  }, [delAsk, delProgress]);
+
+  const runDelete = async () => {
+    const { names, resolve } = delAsk;
+    let done = 0;
+    setDelProgress({ done: 0, total: names.length });
+    try {
+      for (let i = 0; i < names.length; i += 500) {
+        const chunk = names.slice(i, i + 500);
+        await mediaDelete.onDelete(chunk);
+        done += chunk.length;
+        setDelProgress({ done, total: names.length });
+      }
+      setNotice({ text: `${deleteNoun(names, true)} deleted` });
+      resolve(true);
+    } catch (err) {
+      setNotice({ text: `${done ? `Deleted ${done} of ${names.length}. ` : ""}${err?.message || "Couldn't delete. Please try again."}`, error: true });
+      resolve(done > 0);
+    } finally {
+      setDelAsk(null);
+      setDelProgress(null);
+    }
+  };
+
+  // Trash chip on media bubbles (event delegation on the rendered window).
+  useEffect(() => {
+    const el = chatRef.current;
+    if (!el || !mediaDelete) return;
+    const onClick = (e) => {
+      const b = e.target.closest?.("button.media-del[data-del]");
+      if (!b) return;
+      e.preventDefault();
+      e.stopPropagation();
+      requestDelete([b.getAttribute("data-del")]);
+    };
+    el.addEventListener("click", onClick);
+    return () => el.removeEventListener("click", onClick);
+  }, [mediaDelete, requestDelete, messagesHtml]);
 
   // Report broken media (e.g. an expired signed link) so the parent can refresh.
   useEffect(() => {
@@ -750,6 +828,30 @@ export default function ChatViewer({
         <div className="chat chat-center">{emptyState}</div>
       )}
 
+      {delAsk && (() => {
+        const n = delAsk.names.length;
+        const hard = mediaDelete?.mode === "hard";
+        return (
+          <ConfirmDialog
+            title={hard
+              ? `Permanently delete ${n === 1 ? "this media file" : `${n.toLocaleString()} media files`}?`
+              : `Delete ${deleteNoun(delAsk.names)} from this chat?`}
+            message={hard
+              ? <>{n === 1 ? "It'll" : "They'll"} be erased from storage and the database. This can&apos;t be undone.</>
+              : <>{n === 1 ? "It'll" : "They'll"} be removed from your vault view.</>}
+            confirmLabel={hard ? "Delete permanently" : "Delete"}
+            danger
+            requireText={hard && n > 20 ? "DELETE" : null}
+            busy={!!delProgress}
+            busyLabel={delProgress && delProgress.total > 500 ? `Deleting… ${delProgress.done.toLocaleString()} / ${delProgress.total.toLocaleString()}` : "Deleting…"}
+            onConfirm={runDelete}
+            onCancel={cancelDelete}
+          />
+        );
+      })()}
+
+      {notice && <div className={`toast${notice.error ? " error" : ""}`} role="status">{notice.text}</div>}
+
       {showToBottom && chat && (
         <button
           className="to-bottom" title="Scroll to latest"
@@ -784,6 +886,9 @@ export default function ChatViewer({
           downloadUrls={downloadUrls}
           remote={remote}
           onMediaEvent={onMediaEvent}
+          mediaDelete={mediaDelete ? { mode: mediaDelete.mode, onDelete: requestDelete } : null}
+          deletedMedia={deletedSet}
+          flaggedMedia={flaggedSet}
           onJump={jumpToMessage}
           onClose={() => setInfoOpen(false)}
         />
@@ -1065,4 +1170,19 @@ export default function ChatViewer({
       )}
     </main>
   );
+}
+
+// "3 photos" / "this video" / "12 media files" … for confirm copy and notices.
+const PLURAL = { Photo: "photos", Sticker: "stickers", Video: "videos", "Voice note": "voice notes", Audio: "audio files", Document: "documents" };
+function deleteNoun(names, capitalized = false) {
+  const labels = new Set(names.map(mediaLabel));
+  const n = names.length;
+  let out;
+  if (labels.size === 1) {
+    const [l] = labels;
+    out = n === 1 ? (capitalized ? l : `this ${l.toLowerCase()}`) : `${n.toLocaleString()} ${PLURAL[l]}`;
+  } else {
+    out = `${n.toLocaleString()} media files`;
+  }
+  return capitalized ? out.charAt(0).toUpperCase() + out.slice(1) : out;
 }

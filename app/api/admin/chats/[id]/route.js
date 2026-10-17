@@ -10,7 +10,7 @@ export const GET = handler(async (request, { params }) => {
   if (response) return response;
   const { id } = await params;
   const chat = await anyChat(id);
-  const detail = await buildChatDetail(chat);
+  const detail = await buildChatDetail(chat, { admin: true });
   await logChatOpen(request, admin.id, chat, { admin: true });
   const a = serializeAdminChat(chat);
   return json({ ...detail, chat: { ...detail.chat, deletedAt: a.deletedAt, daysSinceDeleted: a.daysSinceDeleted }, owner: a.owner });

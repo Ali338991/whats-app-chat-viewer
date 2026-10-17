@@ -26,7 +26,7 @@ export const POST = handler(async (request) => {
 
   const names = [...new Set(wanted.map((e) => e.mediaName))];
   const media = await prisma.mediaFile.findMany({
-    where: { chatId: chat.id, name: { in: names } },
+    where: { chatId: chat.id, name: { in: names }, deletedAt: null },
     select: { id: true, name: true, kind: true },
   });
   const byName = new Map(media.map((m) => [m.name, m]));

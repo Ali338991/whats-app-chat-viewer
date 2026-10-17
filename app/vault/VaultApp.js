@@ -15,7 +15,7 @@ import { formatDate, initial, avatarColor } from "../../lib/chat";
 import { formatBytes } from "../../lib/vaultUpload";
 import { useTheme } from "../../lib/useTheme";
 import { BRAND_NAME } from "../../lib/brand";
-import { getJson, buildMediaMaps, fetchText, REFRESH_AFTER_MS } from "../../lib/chatDetail";
+import { getJson, buildMediaMaps, withoutMedia, fetchText, REFRESH_AFTER_MS } from "../../lib/chatDetail";
 import { useMediaEventReporter } from "../../lib/mediaEvents";
 import {
   IconLogo, IconSun, IconMoon, IconUpload, IconTrash, IconLogout, IconUsers, IconSearch,
@@ -43,6 +43,8 @@ export default function VaultApp({ user }) {
   const [activeId, setActiveId] = useState(null);
   const [active, setActive] = useState(null); // {id, name, text, me}
   const [maps, setMaps] = useState({ mediaUrls: {}, downloadUrls: {} });
+  const mapsRef = useRef(maps);
+  mapsRef.current = maps;
   const [opening, setOpening] = useState(null); // {label, percent}
   const [openError, setOpenError] = useState("");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -145,6 +147,22 @@ export default function VaultApp({ user }) {
     document.addEventListener("visibilitychange", check);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", check); };
   }, [active, refreshLinks]);
+
+  // Users soft-delete media: hidden from them, not counted toward storage.
+  const activeId_ = active?.id;
+  const mediaDelete = useMemo(() => (activeId_ ? {
+    mode: "soft",
+    onDelete: async (names) => {
+      const ids = names.map((n) => mapsRef.current.idByName?.[n]).filter(Boolean);
+      if (ids.length) {
+        await getJson(`/api/vault/chats/${activeId_}/media/delete`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mediaIds: ids }),
+        });
+      }
+      setMaps((m) => withoutMedia(m, names));
+      loadList(); // refresh counts + storage usage in the sidebar
+    },
+  } : null), [activeId_, loadList]);
 
   /* ---------- actions ---------- */
   const setMe = async (val) => {
@@ -377,6 +395,8 @@ export default function VaultApp({ user }) {
         onSetMe={setMe}
         onMediaError={refreshLinks}
         onMediaEvent={reportMedia}
+        mediaDelete={mediaDelete}
+        deletedMedia={maps.deleted}
         emptyState={errorState || empty}
       />
 

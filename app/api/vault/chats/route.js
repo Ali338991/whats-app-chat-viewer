@@ -2,7 +2,7 @@ import { prisma } from "../../../../lib/prisma";
 import { json, error, readJson, handler, isInt, optString, serializeChat } from "../../../../lib/api";
 import { requireUser } from "../../../../lib/auth";
 import { presignPut, textKeyFor, r2Configured } from "../../../../lib/r2";
-import { usageBytes, expireStaleUploads, formatBytes } from "../../../../lib/vault";
+import { usageBytes, expireStaleUploads, formatBytes, removedMediaByChat } from "../../../../lib/vault";
 
 // GET /api/vault/chats — the signed-in user's chats (newest first) + storage usage.
 export const GET = handler(async () => {
@@ -13,8 +13,14 @@ export const GET = handler(async () => {
     prisma.chat.findMany({ where: { userId: user.id, deletedAt: null }, orderBy: { createdAt: "desc" } }),
     usageBytes(user.id),
   ]);
+  // Files the user deleted from a chat don't count toward its size/media count.
+  const removed = await removedMediaByChat(chats.map((c) => c.id));
   return json({
-    chats: chats.map(serializeChat),
+    chats: chats.map((c) => {
+      const s = serializeChat(c);
+      const r = removed.get(c.id);
+      return r ? { ...s, mediaCount: Math.max(0, s.mediaCount - r.count), totalBytes: Math.max(0, s.totalBytes - r.bytes) } : s;
+    }),
     usage: { usedBytes: used, limitBytes: user.storageLimitBytes == null ? null : Number(user.storageLimitBytes) },
   });
 });

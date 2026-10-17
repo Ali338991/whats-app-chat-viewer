@@ -66,17 +66,19 @@ model Chat {
 }
 
 model MediaFile {
-  id     String @id @default(cuid())
-  chatId String
-  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  name   String // original WhatsApp filename (basename)
-  key    String // R2 object key
-  size   BigInt
-  mime   String
-  kind   String // image | sticker | video | audio | file
+  id        String    @id @default(cuid())
+  chatId    String
+  chat      Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  name      String // original WhatsApp filename (basename)
+  key       String // R2 object key
+  size      BigInt
+  mime      String
+  kind      String // image | sticker | video | audio | file
+  deletedAt DateTime? // set when the user deletes this file from the chat (soft delete); admins hard-delete
 
   @@unique([chatId, name])
   @@index([chatId])
+  @@index([deletedAt])
 }
 
 // Audit log: logins and in-chat activity (actor = userId), plus admin actions.

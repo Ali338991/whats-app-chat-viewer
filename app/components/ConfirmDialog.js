@@ -7,7 +7,7 @@ import { IconAlert } from "./Icons";
 // `requireText`: the user must type this exact text to enable the confirm button.
 export default function ConfirmDialog({
   title, message, confirmLabel = "Confirm", cancelLabel = "Cancel",
-  danger = false, requireText = null, busy = false, onConfirm, onCancel,
+  danger = false, requireText = null, busy = false, busyLabel = "Working…", onConfirm, onCancel,
 }) {
   const [typed, setTyped] = useState("");
   useEffect(() => {
@@ -31,7 +31,7 @@ export default function ConfirmDialog({
         <div className="confirm-actions">
           <button className="btn btn-ghost" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
           <button className={`btn ${danger ? "btn-danger-solid" : "btn-primary"}`} onClick={onConfirm} disabled={!ok || busy} autoFocus={!requireText}>
-            {busy ? <><span className="btn-spinner" /> Working…</> : confirmLabel}
+            {busy ? <><span className="btn-spinner" /> {busyLabel}</> : confirmLabel}
           </button>
         </div>
       </div>

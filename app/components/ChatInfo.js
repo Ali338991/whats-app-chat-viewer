@@ -5,6 +5,9 @@ import {
   attachment, mediaKind, basename, formatDate, formatText,
   escapeHtml, initial, avatarColor,
 } from "../../lib/chat";
+import { IconTrash, IconCheck } from "./Icons";
+
+const EMPTY_SET = new Set();
 
 // Pull URLs out of raw message text (trailing punctuation trimmed).
 const URL_RE = /https?:\/\/[^\s]+/g;
@@ -32,7 +35,16 @@ function useIncremental(totalCount, page, resetKey) {
   return [count, sentinelRef];
 }
 
-export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, remote = false, onMediaEvent, onJump, onClose }) {
+/**
+ * mediaDelete: { mode: "soft" | "hard", onDelete(names[]) => Promise<boolean> } — optional;
+ *   absent in local mode (no delete UI at all).
+ * deletedMedia: Set of file names deleted from the chat (hidden here).
+ * flaggedMedia: Set of file names the user deleted (admin view: shown with a badge).
+ */
+export default function ChatInfo({
+  chatName, messages, mediaUrls, downloadUrls, remote = false, onMediaEvent, onJump, onClose,
+  mediaDelete = null, deletedMedia = EMPTY_SET, flaggedMedia = EMPTY_SET,
+}) {
   // Download links: in the vault these go through /api/vault/media/[id]?download=1
   // so the file is saved with its original name.
   const dl = (name, url) => (downloadUrls && downloadUrls[name]) || url;
@@ -51,7 +63,7 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
         const kind = mediaKind(att.name);
         if (kind === "image" || kind === "sticker" || kind === "video") {
           if (url) media.push({ i, name, url, kind, caption: att.caption, sender: m.sender, date: m.date, time: m.time });
-        } else {
+        } else if (!deletedMedia.has(name) && (url || !remote)) { // vault: hide files that are gone
           docs.push({ i, name, url, caption: att.caption, sender: m.sender, date: m.date, time: m.time });
         }
       }
@@ -62,12 +74,43 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
       }
     });
     return { media, links, docs };
-  }, [messages, mediaUrls]);
+  }, [messages, mediaUrls, deletedMedia]);
 
   const counts = { media: media.length, links: links.length, docs: docs.length };
   const [mediaShown, mediaSentinel] = useIncremental(media.length, MEDIA_PAGE, `${tab}|${media.length}`);
   const [linksShown, linksSentinel] = useIncremental(links.length, LIST_PAGE, `${tab}|${links.length}`);
   const [docsShown, docsSentinel] = useIncremental(docs.length, LIST_PAGE, `${tab}|${docs.length}`);
+
+  /* ---------- selection + deletion ---------- */
+  const canDelete = !!mediaDelete;
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => { setSelecting(false); setSelected(new Set()); }, [tab]);
+  const listForTab = tab === "media" ? media : tab === "docs" ? docs.filter((d) => d.url) : [];
+  const toggle = (name) => setSelected((sel) => {
+    const next = new Set(sel);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  });
+  const allSelected = listForTab.length > 0 && listForTab.every((x) => selected.has(x.name));
+  const exitSelection = () => { setSelecting(false); setSelected(new Set()); };
+  const deleteNames = async (names) => {
+    if (!mediaDelete || !names.length || deleting) return false;
+    setDeleting(true);
+    try {
+      const ok = await mediaDelete.onDelete(names);
+      if (ok) setSelected((sel) => { const next = new Set(sel); names.forEach((n) => next.delete(n)); return next; });
+      return ok;
+    } finally {
+      setDeleting(false);
+    }
+  };
+  const deleteSelected = async () => {
+    // keep chat order (not click order)
+    const names = listForTab.filter((x) => selected.has(x.name)).map((x) => x.name);
+    if (await deleteNames(names)) exitSelection();
+  };
 
   /* ---------- lightbox ---------- */
   const openViewer = useCallback((idx) => setViewer(idx), []);
@@ -78,17 +121,24 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
 
   useEffect(() => {
     const onKey = (e) => {
+      if (document.querySelector(".confirm-modal")) return; // a confirm dialog handles its own keys
       if (viewer >= 0) {
         if (e.key === "Escape") closeViewer();
         else if (e.key === "ArrowRight") stepViewer(1);
         else if (e.key === "ArrowLeft") stepViewer(-1);
       } else if (e.key === "Escape") {
-        onClose();
+        if (selecting) exitSelection();
+        else onClose();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [viewer, closeViewer, stepViewer, onClose]);
+  }, [viewer, closeViewer, stepViewer, onClose, selecting]);
+
+  // After a deletion the current item disappears: show the next one, or close.
+  useEffect(() => {
+    if (viewer >= media.length) setViewer(media.length - 1);
+  }, [viewer, media.length]);
 
   const cur = viewer >= 0 ? media[viewer] : null;
 
@@ -122,11 +172,40 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
           ))}
         </div>
 
+        {canDelete && (tab === "media" || tab === "docs") && listForTab.length > 0 && (
+          selecting ? (
+            <div className="select-bar">
+              <span className="sb-count">{selected.size.toLocaleString()} selected</span>
+              <button className="btn btn-ghost btn-xs" onClick={() => setSelected(allSelected ? new Set() : new Set(listForTab.map((x) => x.name)))}>
+                {allSelected ? "Clear" : `Select all (${listForTab.length.toLocaleString()})`}
+              </button>
+              <span className="sb-spacer" />
+              <button className="btn btn-ghost btn-xs" onClick={exitSelection}>Cancel</button>
+              <button className="btn btn-danger-solid btn-xs" disabled={!selected.size || deleting} onClick={deleteSelected}>
+                <IconTrash size={13} /> Delete
+              </button>
+            </div>
+          ) : (
+            <div className="select-bar idle">
+              <span className="sb-spacer" />
+              <button className="btn btn-ghost btn-xs" onClick={() => setSelecting(true)}><IconCheck size={13} /> Select</button>
+            </div>
+          )
+        )}
+
         {tab === "media" && (
           media.length ? (<>
-            <div className="media-grid">
+            <div className={`media-grid${selecting ? " selecting" : ""}`}>
               {media.slice(0, mediaShown).map((m, idx) => (
-                <button key={m.i} className="media-cell" onClick={() => openViewer(idx)} title={`${m.sender} · ${formatDate(m.date)}`}>
+                <button
+                  key={m.i}
+                  className={`media-cell${selecting && selected.has(m.name) ? " selected" : ""}`}
+                  onClick={() => (selecting ? toggle(m.name) : openViewer(idx))}
+                  title={`${m.sender} · ${formatDate(m.date)}`}
+                  aria-pressed={selecting ? selected.has(m.name) : undefined}
+                >
+                  {selecting && <span className={`sel-check${selected.has(m.name) ? " on" : ""}`} aria-hidden="true"><IconCheck size={13} /></span>}
+                  {flaggedMedia.has(m.name) && <span className="tile-flag">Deleted by user</span>}
                   {m.kind === "video" ? (
                     <>
                       {remote
@@ -168,14 +247,25 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
           docs.length ? (<>
             <div className="info-list">
               {docs.slice(0, docsShown).map((d, idx) => (
-                <div key={idx} className="doc-row">
+                <div
+                  key={idx}
+                  className={`doc-row${selecting && d.url ? " selectable" : ""}${selecting && selected.has(d.name) ? " selected" : ""}`}
+                  onClick={selecting && d.url ? () => toggle(d.name) : undefined}
+                >
+                  {selecting && d.url && <span className={`sel-check inline${selected.has(d.name) ? " on" : ""}`} aria-hidden="true"><IconCheck size={13} /></span>}
                   <div className="doc-icon">📄</div>
                   <div className="doc-info">
                     <div className="doc-name">{d.name}</div>
-                    <div className="doc-meta">{d.sender} · {formatDate(d.date)}</div>
+                    <div className="doc-meta">
+                      {d.sender} · {formatDate(d.date)}
+                      {flaggedMedia.has(d.name) && <span className="tile-flag inline">Deleted by user</span>}
+                    </div>
                   </div>
-                  {d.url && <a className="doc-dl" href={dl(d.name, d.url)} download={d.name} title="Download" onClick={() => onMediaEvent?.("DOC_DOWNLOAD", d.name)}>⬇</a>}
-                  <button className="doc-jump" title="Show in chat" onClick={() => goToMessage(d.i)}>↪</button>
+                  {!selecting && d.url && <a className="doc-dl" href={dl(d.name, d.url)} download={d.name} title="Download" onClick={() => onMediaEvent?.("DOC_DOWNLOAD", d.name)}>⬇</a>}
+                  {!selecting && canDelete && d.url && (
+                    <button className="doc-del" title="Delete" disabled={deleting} onClick={() => deleteNames([d.name])}><IconTrash size={16} /></button>
+                  )}
+                  {!selecting && <button className="doc-jump" title="Show in chat" onClick={() => goToMessage(d.i)}>↪</button>}
                 </div>
               ))}
             </div>
@@ -190,11 +280,14 @@ export default function ChatInfo({ chatName, messages, mediaUrls, downloadUrls, 
           <div className="lb-top">
             <div className="lb-meta">
               <div className="lb-sender">{cur.sender}</div>
-              <div className="lb-date">{formatDate(cur.date)} · {cur.time}</div>
+              <div className="lb-date">{formatDate(cur.date)} · {cur.time}{flaggedMedia.has(cur.name) ? " · Deleted by user" : ""}</div>
             </div>
             <div className="lb-actions">
               <button className="icon-btn" title="Show in chat" onClick={() => goToMessage(cur.i)}>↪</button>
               <a className="icon-btn" href={dl(cur.name, cur.url)} download={cur.name} title="Download">⬇</a>
+              {canDelete && (
+                <button className="icon-btn lb-del" title="Delete" disabled={deleting} onClick={() => deleteNames([cur.name])}><IconTrash size={18} /></button>
+              )}
               <button className="icon-btn" title="Close" onClick={closeViewer}>✕</button>
             </div>
           </div>

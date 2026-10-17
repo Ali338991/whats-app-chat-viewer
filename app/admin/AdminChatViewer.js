@@ -3,9 +3,9 @@
 // Read-only admin view of any user's chat (including removed ones). Uses the
 // admin detail endpoint; "me" selection is local only (never saved).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChatViewer from "../components/ChatViewer";
-import { getJson, buildMediaMaps, fetchText, REFRESH_AFTER_MS } from "../../lib/chatDetail";
+import { getJson, buildMediaMaps, withoutMedia, fetchText, REFRESH_AFTER_MS } from "../../lib/chatDetail";
 import { IconBack, IconShield } from "../components/Icons";
 
 const ownerName = (o) => (o ? [o.firstName, o.lastName].filter(Boolean).join(" ") || o.email : "this user");
@@ -15,6 +15,22 @@ export default function AdminChatViewer({ chatId, onBack }) {
   const [owner, setOwner] = useState(null);
   const [meta, setMeta] = useState(null);
   const [maps, setMaps] = useState({ mediaUrls: {}, downloadUrls: {} });
+  const mapsRef = useRef(maps);
+  mapsRef.current = maps;
+
+  // Admins delete media permanently (storage + database).
+  const mediaDelete = useMemo(() => ({
+    mode: "hard",
+    onDelete: async (names) => {
+      const ids = names.map((n) => mapsRef.current.idByName?.[n]).filter(Boolean);
+      if (ids.length) {
+        await getJson(`/api/admin/chats/${chatId}/media/delete`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mediaIds: ids }),
+        });
+      }
+      setMaps((m) => withoutMedia(m, names));
+    },
+  }), [chatId]);
   const [loading, setLoading] = useState({ label: "Opening chat…" });
   const [err, setErr] = useState("");
   const fetchedAt = useRef(0);
@@ -81,6 +97,9 @@ export default function AdminChatViewer({ chatId, onBack }) {
           onBack={onBack}
           onSetMe={(v) => setChat((c) => (c ? { ...c, me: v } : c))}
           onMediaError={refreshLinks}
+          mediaDelete={chat ? mediaDelete : null}
+          deletedMedia={maps.deleted}
+          flaggedMedia={maps.flagged}
           emptyState={err ? (
             <div className="hero hero-vault">
               <h1 className="hero-title small">Couldn&apos;t open this chat</h1>

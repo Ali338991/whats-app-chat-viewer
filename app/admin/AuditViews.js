@@ -3,7 +3,7 @@
 // Admin audit views: a user's Logins + Activity, and the global Audit log feed.
 
 import { useCallback, useEffect, useState } from "react";
-import { IconAlert, IconLock, IconImage, IconVideo, IconMic, IconFile, IconChat, IconClose, IconShield } from "../components/Icons";
+import { IconAlert, IconLock, IconImage, IconVideo, IconMic, IconFile, IconChat, IconClose, IconShield , IconTrash } from "../components/Icons";
 
 async function api(url) {
   const res = await fetch(url);
@@ -141,8 +141,9 @@ export function UserLogins({ userId }) {
 const ACT_FILTERS = [
   ["", "All activity"], ["CHAT_OPEN", "Chats opened"], ["MEDIA_VIEW", "Photos viewed"],
   ["VIDEO_PLAY", "Videos played"], ["AUDIO_PLAY", "Voice notes / audio"], ["DOC_DOWNLOAD", "Documents"],
+  ["MEDIA_DELETE", "Media deleted"],
 ];
-const ACT_ICON = { CHAT_OPEN: IconChat, MEDIA_VIEW: IconImage, VIDEO_PLAY: IconVideo, AUDIO_PLAY: IconMic, DOC_DOWNLOAD: IconFile };
+const ACT_ICON = { CHAT_OPEN: IconChat, MEDIA_VIEW: IconImage, VIDEO_PLAY: IconVideo, AUDIO_PLAY: IconMic, DOC_DOWNLOAD: IconFile, MEDIA_DELETE: IconTrash };
 
 function activityText(e) {
   const chat = <b>{e.chatName || "a chat"}</b>;
@@ -153,6 +154,7 @@ function activityText(e) {
     case "VIDEO_PLAY": return <>Played video {file} in {chat}</>;
     case "AUDIO_PLAY": return <>Played {/\.opus$/i.test(e.mediaName || "") ? "voice note" : "audio"} {file} in {chat}</>;
     case "DOC_DOWNLOAD": return <>Downloaded document {file} from {chat}</>;
+    case "MEDIA_DELETE": return <>Deleted {e.meta?.count ?? "?"} media file{e.meta?.count === 1 ? "" : "s"} from {chat}</>;
     default: return e.type;
   }
 }
@@ -255,6 +257,7 @@ const AUDIT_FILTERS = [
   ["", "All events"], ["ADMIN", "Admin actions"], ["LOGIN", "Sign-ins"], ["LOGIN_FAILED", "Failed sign-ins"],
   ["SIGNUP", "Sign-ups"], ["LOGOUT", "Sign-outs"], ["PASSWORD_CHANGE", "Password changes"], ["CHAT_OPEN", "Chats opened"], ["MEDIA_VIEW", "Photos viewed"],
   ["VIDEO_PLAY", "Videos played"], ["AUDIO_PLAY", "Audio played"], ["DOC_DOWNLOAD", "Documents downloaded"],
+  ["MEDIA_DELETE", "Media deleted by user"], ["ADMIN_MEDIA_DELETE", "Admin deleted media"],
   ["ADMIN_CHAT_OPEN", "Admin opened chat"], ["ADMIN_CHAT_RESTORE", "Admin restored chat"], ["ADMIN_CHAT_DELETE", "Admin deleted chat"],
   ["ADMIN_PURGE", "Admin purge"], ["ADMIN_USER_CREATE", "Admin created user"], ["ADMIN_USER_UPDATE", "Admin updated user"],
   ["ADMIN_USER_DELETE", "Admin deleted user"],
@@ -286,6 +289,7 @@ function describe(e) {
     case "LOGIN_FAILED": return <>failed to sign in{e.meta?.locked ? " — account locked" : e.meta?.whileLocked ? " (while locked)" : e.meta?.disabled ? " (account blocked)" : ""}</>;
     case "ADMIN_CHAT_OPEN": return <>opened {tgt}&apos;s chat {chat}</>;
     case "ADMIN_CHAT_RESTORE": return <>restored {tgt}&apos;s chat {chat}</>;
+    case "ADMIN_MEDIA_DELETE": return <>permanently deleted {e.meta?.count ?? "?"} media file{e.meta?.count === 1 ? "" : "s"} from {tgt}&apos;s chat {chat}</>;
     case "ADMIN_CHAT_DELETE": return <>permanently deleted {tgt}&apos;s chat {chat}</>;
     case "ADMIN_PURGE": return <>purged {e.meta?.count ?? "?"} deleted chat{e.meta?.count === 1 ? "" : "s"} older than {e.meta?.days ?? "?"} days</>;
     case "ADMIN_USER_CREATE": return <>created user {tgt}</>;
